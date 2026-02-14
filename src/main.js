@@ -60,7 +60,7 @@ async function handleAuth(e) {
   // I MUST update `socket.js` to point to localhost or the same origin.
   // For now, I'll aim at localhost:3001 since I see `server.listen(3001)` in server/index.js.
   
-  const serverUrl = 'http://localhost:3001'; 
+  const serverUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001'; 
 
   try {
     const res = await fetch(`${serverUrl}${endpoint}`, {
