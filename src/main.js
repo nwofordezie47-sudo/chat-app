@@ -1,12 +1,47 @@
 import './style.css';
 import socket from './socket';
+import Toastify from 'toastify-js';
+import "toastify-js/src/toastify.css";
 
 const app = document.querySelector('#app');
 
+const infoModalOverlay = document.createElement('div');
+infoModalOverlay.className = 'info-modal-overlay';
+infoModalOverlay.innerHTML = `
+  <div class="info-modal">
+    <h2 id="modal-title"></h2>
+    <p id="modal-message"></p>
+    <button id="modal-close">OK</button>
+  </div>
+`;
+document.body.appendChild(infoModalOverlay);
+
+const modalTitle = infoModalOverlay.querySelector('#modal-title');
+const modalMessage = infoModalOverlay.querySelector('#modal-message');
+const modalClose = infoModalOverlay.querySelector('#modal-close');
+
+modalClose.onclick = () => infoModalOverlay.classList.remove('active');
+
+function showModal(title, message) {
+  modalTitle.textContent = title;
+  modalMessage.textContent = message;
+  infoModalOverlay.classList.add('active');
+}
+
+function showError(message) {
+  Toastify({
+    text: message,
+    duration: 3000,
+    close: true,
+    gravity: "top",
+    position: "right",
+    className: "toastify-error",
+    stopOnFocus: true
+  }).showToast();
+}
+
 let username = '';
 let currentRoom = 'general';
-
-// Initial State: Show Login Modal
 let isLoginMode = true;
 
 function renderLogin() {
@@ -21,6 +56,7 @@ function renderLogin() {
         <div id="auth-error" class="error-msg"></div>
         <form id="auth-form">
           <input type="text" id="username-input" placeholder="Username" required />
+          ${!isLoginMode ? '<input type="email" id="email-input" placeholder="Email" required />' : ''}
           <input type="password" id="password-input" placeholder="Password" required />
           <button type="submit" id="join-btn">${btnText}</button>
         </form>
@@ -40,39 +76,32 @@ async function handleAuth(e) {
   e.preventDefault();
   const userIn = document.querySelector('#username-input').value.trim();
   const passIn = document.querySelector('#password-input').value.trim();
+  const emailIn = !isLoginMode ? document.querySelector('#email-input').value.trim() : null;
   const errorEl = document.querySelector('#auth-error');
 
-  if (!userIn || !passIn) {
-    errorEl.textContent = 'Please fill in all fields.';
+  if (!userIn || !passIn || (!isLoginMode && !emailIn)) {
+    showError('Please fill in all fields.');
     return;
   }
 
   const endpoint = isLoginMode ? '/login' : '/register';
-  // Use current origin + server port (assuming proxy or same origin, but detailed explicitly here)
-  // Since Vite proxy isn't set up for /login in the provided config, we might need full URL if ports differ.
-  // The server is on 3001. Vite is likely 5173.
-  // I will assume we need to hit http://localhost:3001
-  // Wait, the client socket connects to 'https://chat-app-f9bz.onrender.com' in socket.js!
-  // The user didn't say to change that. But I am adding the feature locally.
-  // I should probably point to the local server for now or update socket.js to be dynamic.
-  // The user's prompt implies adding features to THIS codebase.
-  // If I add backend code to `server/index.js` but the client points to a deployed Render URL, my changes won't work!
-  // I MUST update `socket.js` to point to localhost or the same origin.
-  // For now, I'll aim at localhost:3001 since I see `server.listen(3001)` in server/index.js.
-  
   const serverUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001'; 
 
   try {
     const res = await fetch(`${serverUrl}${endpoint}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: userIn, password: passIn })
+      body: JSON.stringify({ 
+        username: userIn, 
+        password: passIn,
+        ...(emailIn && { email: emailIn })
+      })
     });
 
     const data = await res.json();
 
     if (!res.ok) {
-      errorEl.textContent = data.error || 'Authentication failed';
+      showError(data.error || 'Authentication failed');
       return;
     }
 
@@ -80,22 +109,21 @@ async function handleAuth(e) {
       username = data.username;
       joinChat();
     } else {
-      // Registration successful, switch to login or auto-login
-      alert('Registration successful! Please login.');
+      showModal('Registration Successful', 'Your account has been created. Please login.');
       isLoginMode = true;
       renderLogin();
     }
   } catch (err) {
     console.error(err);
-    errorEl.textContent = 'Failed to connect to server.';
+    showError('Failed to connect to server.');
   }
 }
 
 function joinChat() {
-  socket.auth = { username }; // Send auth data if needed, or just emit login
-  socket.connect(); // Ensure socket connects
-  socket.emit('login', username); // Register user
-  socket.emit('join_room', 'general'); // Join global by default
+  socket.auth = { username };
+  socket.connect();
+  socket.emit('login', username);
+  socket.emit('join_room', 'general');
   renderChat();
 }
 
@@ -133,18 +161,12 @@ function renderChat() {
     </div>
   `;
 
-  const sendBtn = document.querySelector('#send-btn');
-  const messageInput = document.querySelector('#message-input');
-  const fileInput = document.querySelector('#file-input');
-
-  sendBtn.addEventListener('click', sendMessage);
-  messageInput.addEventListener('keypress', (e) => {
+  document.querySelector('#send-btn').addEventListener('click', sendMessage);
+  document.querySelector('#message-input').addEventListener('keypress', (e) => {
     if (e.key === 'Enter') sendMessage();
   });
-  
-  fileInput.addEventListener('change', handleFileUpload);
-
-  messageInput.addEventListener('input', () => {
+  document.querySelector('#file-input').addEventListener('change', handleFileUpload);
+  document.querySelector('#message-input').addEventListener('input', () => {
     socket.emit('typing', { room: currentRoom, user: username });
   });
 }
@@ -153,30 +175,27 @@ async function handleFileUpload(e) {
   const file = e.target.files[0];
   if (!file) return;
 
-  if (file.size > 1024 * 1024) { // 1MB limit
-    alert('File is too large. Max 1MB.');
-    e.target.value = ''; // Reset
+  if (file.size > 1024 * 1024) {
+    showError('File is too large. Max 1MB.');
+    e.target.value = '';
     return;
   }
 
   const reader = new FileReader();
   reader.readAsDataURL(file);
   reader.onload = () => {
-    const base64 = reader.result;
     const messageData = {
       room: currentRoom,
       author: username,
-      message: '', // Empty text
-      file: base64,
+      message: '',
+      file: reader.result,
       fileName: file.name,
       fileType: file.type,
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
-    
     socket.emit('send_message', messageData);
     addMessageToUI(messageData, true);
-    
-    e.target.value = ''; // Reset input
+    e.target.value = '';
   };
 }
 
@@ -189,42 +208,30 @@ function switchRoom(room) {
   currentRoom = room;
   document.querySelector('#chat-header h3').textContent = `# ${room}`;
   document.querySelector('#message-list').innerHTML = '';
-  
-  // Close sidebar on mobile when room is selected
   document.querySelector('#sidebar').classList.remove('active');
   document.querySelector('.sidebar-overlay').classList.remove('active');
-  
-  if (room === 'general') {
-    socket.emit('join_room', 'general');
-  }
+  if (room === 'general') socket.emit('join_room', 'general');
   socket.emit('read_messages', { room, user: username });
 }
 
 function startPrivateChat(targetUser) {
   if (targetUser === username) {
-    alert("You cannot chat with yourself!");
+    showError("You cannot chat with yourself!");
     return; 
   }
-
-  // Visual feedback
   const header = document.querySelector('#chat-header h3');
   if (header) header.textContent = `Starting chat with ${targetUser}...`;
   document.body.style.cursor = 'wait';
-
   socket.emit('join_private', targetUser);
-  
-  // Close sidebar on mobile
   document.querySelector('#sidebar').classList.remove('active');
   document.querySelector('.sidebar-overlay').classList.remove('active');
 }
 
-// Socket Listeners for Private Chat
 socket.on('user_list', (users) => {
   const userListEl = document.querySelector('#user-list');
   if (!userListEl) return;
-  
   userListEl.innerHTML = users
-    .filter(u => u !== username) // Don't show self
+    .filter(u => u !== username)
     .map(u => `<p onclick="startPrivateChat('${u}')">👤 ${u}</p>`)
     .join('');
 });
@@ -239,15 +246,13 @@ socket.on('private_room_joined', (data) => {
 function sendMessage() {
   const input = document.querySelector('#message-input');
   const message = input.value.trim();
-
   if (message) {
     const messageData = {
       room: currentRoom,
       author: username,
-      message: message,
+      message,
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
-
     socket.emit('send_message', messageData);
     addMessageToUI(messageData, true);
     input.value = '';
@@ -257,13 +262,9 @@ function sendMessage() {
 function addMessageToUI(data, isOwn, container) {
   const messageList = container || document.querySelector('#message-list');
   if (!messageList) return;
-
   const messageElement = document.createElement('div');
-  messageElement.classList.add('message');
-  messageElement.classList.add(isOwn ? 'own' : 'other');
-
+  messageElement.classList.add('message', isOwn ? 'own' : 'other');
   let contentHtml = `<div class="message-content">${data.message}</div>`;
-  
   if (data.file) {
     if (data.fileType.startsWith('image/')) {
       contentHtml = `<div class="message-content"><img src="${data.file}" style="max-width: 200px; border-radius: 8px;" alt="${data.fileName}" /></div>`;
@@ -271,7 +272,6 @@ function addMessageToUI(data, isOwn, container) {
       contentHtml = `<div class="message-content"><a href="${data.file}" download="${data.fileName}" style="color:var(--accent-color)">📄 ${data.fileName}</a></div>`;
     }
   }
-
   messageElement.innerHTML = `
     <div class="message-meta">
       ${isOwn ? 'You' : data.author} 
@@ -280,22 +280,15 @@ function addMessageToUI(data, isOwn, container) {
     </div>
     ${contentHtml}
   `;
-
   messageList.appendChild(messageElement);
-  
-  // Only scroll if we are not batch loading (i.e. no container passed)
   if (!container) {
-    // Set timeout to ensure DOM update is processed before scrolling
-    setTimeout(() => {
-      messageList.scrollTop = messageList.scrollHeight;
-    }, 10);
+    setTimeout(() => { messageList.scrollTop = messageList.scrollHeight; }, 10);
   }
 }
 
-// Theme Management
 const themeToggleBtn = document.createElement('button');
 themeToggleBtn.classList.add('theme-toggle');
-themeToggleBtn.innerHTML = '🌙'; // Default icon
+themeToggleBtn.innerHTML = '🌙';
 document.body.appendChild(themeToggleBtn);
 
 function updateThemeIcon(theme) {
@@ -310,16 +303,12 @@ function toggleTheme() {
   updateThemeIcon(newTheme);
 }
 
-// Load saved theme
 const savedTheme = localStorage.getItem('theme') || 'dark';
 document.body.setAttribute('data-theme', savedTheme);
 updateThemeIcon(savedTheme);
-
 themeToggleBtn.addEventListener('click', toggleTheme);
 
-// Socket Listeners
 socket.on('connect', () => {
-  console.log('Socket connected/reconnected');
   if (username) {
     socket.emit('login', username);
     socket.emit('join_room', currentRoom);
@@ -330,9 +319,6 @@ socket.on('receive_message', (data) => {
   if (data.room === currentRoom) {
     addMessageToUI(data, false);
     socket.emit('read_messages', { room: currentRoom, user: username });
-  } else {
-    // Optional: Show a notification badge for other rooms
-    // const notification = new Notification('New Message', { body: data.message });
   }
 });
 
@@ -342,48 +328,30 @@ socket.on('typing', (data) => {
   if (typingEl) {
     typingEl.textContent = `${data.user} is typing...`;
     clearTimeout(typingTimeout);
-    typingTimeout = setTimeout(() => {
-      typingEl.textContent = '';
-    }, 3000);
+    typingTimeout = setTimeout(() => { typingEl.textContent = ''; }, 3000);
   }
 });
 
 socket.on('messages_read', ({ room }) => {
   if (room === currentRoom) {
-    document.querySelectorAll('.read-status').forEach(el => {
-      el.textContent = '✓✓';
-    });
+    document.querySelectorAll('.read-status').forEach(el => { el.textContent = '✓✓'; });
   }
 });
 
 socket.on('load_messages', (messages) => {
   const messageList = document.querySelector('#message-list');
   if (messageList) {
-    messageList.innerHTML = ''; // Clear existing
-    
-    // Create a document fragment to batch DOM insertions
+    messageList.innerHTML = '';
     const fragment = document.createDocumentFragment();
-    
-    messages.forEach(msg => {
-      // Pass the fragment as the container
-      addMessageToUI(msg, msg.author === username, fragment);
-    });
-    
-    // Append all messages at once
+    messages.forEach(msg => { addMessageToUI(msg, msg.author === username, fragment); });
     messageList.appendChild(fragment);
-    
-    // Scroll to bottom once
     messageList.scrollTop = messageList.scrollHeight;
-
-    // Mark messages as read if we are entering the room
     socket.emit('read_messages', { room: currentRoom, user: username });
   }
 });
 
-// Start App
 renderLogin();
 
-// Expose functions to window so HTML onclick attributes works
 window.switchRoom = switchRoom;
 window.startPrivateChat = startPrivateChat;
 window.toggleSidebar = toggleSidebar;
