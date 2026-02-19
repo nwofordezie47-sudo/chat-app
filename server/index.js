@@ -113,12 +113,15 @@ app.post('/register', async (req, res) => {
 app.post('/login', async (req, res) => {
   try {
     const { username, password } = req.body;
+    console.log(`Login attempt for: ${username}`);
     
     // Find user
     const user = await User.findOne({ username });
     if (!user) {
+      console.log(`User not found: ${username}`);
       return res.status(400).json({ error: 'Invalid credentials' });
     }
+    console.log(`User found: ${username}`);
 
     // Check password
     const isMatch = await bcrypt.compare(password, user.password);
