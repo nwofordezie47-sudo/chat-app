@@ -112,8 +112,9 @@ app.post('/register', async (req, res) => {
 
 app.post('/login', async (req, res) => {
   try {
+    console.log('Login Request Body:', JSON.stringify(req.body, null, 2));
     const { username, password } = req.body;
-    console.log(`Login attempt for: ${username}`);
+    console.log(`Login attempt for: ${username} (type: ${typeof username})`);
     
     // Find user
     const user = await User.findOne({ username });
