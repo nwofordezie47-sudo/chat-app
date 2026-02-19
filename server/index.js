@@ -77,11 +77,63 @@ const sendPushNotification = async (pushToken, title, body, data = {}) => {
 
 
 app.post('/register', async (req, res) => {
-// ...
+  try {
+    const { username, email, password, profilePic } = req.body;
+    
+    // Check if user already exists
+    const existingUser = await User.findOne({ $or: [{ username }, { email }] });
+    if (existingUser) {
+      return res.status(400).json({ error: 'Username or email already exists' });
+    }
+
+    // Hash password
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+
+    // Create new user
+    const newUser = new User({
+      username,
+      email,
+      password: hashedPassword,
+      profilePic
+    });
+
+    await newUser.save();
+    
+    const userData = newUser.toObject();
+    delete userData.password;
+    
+    res.status(201).json(userData);
+  } catch (err) {
+    console.error('Registration error:', err);
+    res.status(500).json({ error: 'Server error during registration' });
+  }
 });
 
 app.post('/login', async (req, res) => {
-// ...
+  try {
+    const { username, password } = req.body;
+    
+    // Find user
+    const user = await User.findOne({ username });
+    if (!user) {
+      return res.status(400).json({ error: 'Invalid credentials' });
+    }
+
+    // Check password
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(400).json({ error: 'Invalid credentials' });
+    }
+
+    const userData = user.toObject();
+    delete userData.password;
+    
+    res.json(userData);
+  } catch (err) {
+    console.error('Login error:', err);
+    res.status(500).json({ error: 'Server error during login' });
+  }
 });
 
 // Save Push Token Endpoint
