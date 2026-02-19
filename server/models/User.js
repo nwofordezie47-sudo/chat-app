@@ -10,7 +10,8 @@ const userSchema = new mongoose.Schema({
     from: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     status: { type: String, enum: ['pending', 'accepted', 'rejected'], default: 'pending' }
   }],
-  groups: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Group' }]
+  groups: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Group' }],
+  pushToken: { type: String }
 });
 
 const User = mongoose.model('User', userSchema);

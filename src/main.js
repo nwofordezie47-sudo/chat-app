@@ -85,7 +85,7 @@ async function handleAuth(e) {
   }
 
   const endpoint = isLoginMode ? '/login' : '/register';
-  const serverUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001'; 
+  const serverUrl = import.meta.env.VITE_BACKEND_URL || ''; 
 
   try {
     const res = await fetch(`${serverUrl}${endpoint}`, {
