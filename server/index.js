@@ -22,33 +22,16 @@ dotenv.config();
 // Initialize Expo SDK
 const expo = new Expo();
 
-mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/messaging-app')
+mongoose.connect(process.env.MONGODB_URI)
   .then(() => console.log('Connected to MongoDB'))
   .catch(err => console.error('MongoDB connection error:', err));
 
 const app = express();
 app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// ... (Logging middleware remains the same, omitted for brevity in replacement if unchanged, but for full file context I will keep it clean or just append functions if possible. 
-// Since replace_file_content replaces a block, I will target specific areas or rewriting the whole file is too big. 
-// I will start by adding imports and the helper function at the top, then adding the endpoint, then the socket listeners.)
 
-// I'll effectively rewrite the file to ensure everything is in place correctly without complex piecemeal edits.
-// Actually, piecemeal is better for stability.
-
-// STRATEGY: 
-// 1. Add Import and Helper Function at top.
-// 2. Add Endpoint.
-// 3. Update Socket Listeners.
-
-// WAIT. replace_file_content replaces a *block*. I can't easily do 3 separate edits in one tool call if they are far apart. 
-// Refactoring to just do the import and setup first.
-
-// ... 
-
-// Request Logging Middleware
 app.use((req, res, next) => {
 // ...
   next();
@@ -207,11 +190,9 @@ io.on('connection', (socket) => {
 
 const PORT = process.env.PORT || 3001;
 
-// Serve static files from the React app
 app.use(express.static(path.join(__dirname, '../dist')));
 
-// The "catchall" handler: for any request that doesn't
-// match one above, send back React's index.html file.
+
 app.get('*path', (req, res) => {
   res.sendFile(path.join(__dirname, '../dist/index.html'));
 });
