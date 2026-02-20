@@ -322,6 +322,18 @@ app.get('/groups/:username', async (req, res) => {
   }
 });
 
+// --- MESSAGE ENDPOINTS ---
+
+app.get('/messages/:room', async (req, res) => {
+  try {
+    const messages = await Message.find({ room: req.params.room }).sort({ createdAt: 1 });
+    res.json(messages);
+  } catch (err) {
+    console.error('Get messages error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // Socket.io Logic
 const users = {}; 
 
