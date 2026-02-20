@@ -150,11 +150,177 @@ app.post('/user/push-token', async (req, res) => {
   }
 });
 
-// ...
+// --- FRIEND & USER ENDPOINTS ---
 
-// ... (Rest of endpoints)
+app.get('/users/search', async (req, res) => {
+  try {
+    const { query } = req.query;
+    if (!query) return res.json([]);
+    
+    // Search for users whose username matches the query (case-insensitive)
+    const users = await User.find({ username: { $regex: query, $options: 'i' } })
+                            .select('username profilePic');
+    res.json(users);
+  } catch (err) {
+    console.error('Search error:', err);
+    res.status(500).json({ error: 'Failed to search users' });
+  }
+});
 
-// ...
+app.post('/friends/request', async (req, res) => {
+  try {
+    const { fromUser, toUser } = req.body;
+    
+    const targetUser = await User.findOne({ username: toUser });
+    const sender = await User.findOne({ username: fromUser });
+    
+    if (!targetUser || !sender) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Check if friends already
+    if (targetUser.friends.includes(sender._id)) {
+       return res.status(400).json({ error: 'Already friends' });
+    }
+
+    // Check if request already exists
+    const existingReq = targetUser.friendRequests.find(r => r.from.toString() === sender._id.toString());
+    if (existingReq) {
+      return res.status(400).json({ error: 'Request already sent or pending' });
+    }
+
+    targetUser.friendRequests.push({ from: sender._id, status: 'pending' });
+    await targetUser.save();
+
+    res.json({ message: 'Friend request sent' });
+  } catch (err) {
+    console.error('Friend request error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.post('/friends/accept', async (req, res) => {
+  try {
+    const { username, fromUsername } = req.body;
+    
+    const userToAccept = await User.findOne({ username });
+    const userWhoSent = await User.findOne({ username: fromUsername });
+
+    if (!userToAccept || !userWhoSent) return res.status(404).json({ error: 'User not found' });
+
+    // Update request status (or remove it)
+    userToAccept.friendRequests = userToAccept.friendRequests.filter(
+      req => req.from.toString() !== userWhoSent._id.toString()
+    );
+
+    // Add to friends lists
+    if (!userToAccept.friends.includes(userWhoSent._id)) {
+      userToAccept.friends.push(userWhoSent._id);
+    }
+    if (!userWhoSent.friends.includes(userToAccept._id)) {
+      userWhoSent.friends.push(userToAccept._id);
+    }
+
+    await userToAccept.save();
+    await userWhoSent.save();
+
+    res.json({ message: 'Friend request accepted' });
+  } catch (err) {
+    console.error('Accept request error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.get('/friends/:username', async (req, res) => {
+  try {
+    const user = await User.findOne({ username: req.params.username }).populate('friends', 'username profilePic');
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    res.json(user.friends);
+  } catch (err) {
+    console.error('Get friends error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.get('/friends/requests/:username', async (req, res) => {
+  try {
+    const user = await User.findOne({ username: req.params.username }).populate('friendRequests.from', 'username profilePic');
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    
+    // Filter out only pending ones if needed and format
+    const pending = user.friendRequests.filter(req => req.status === 'pending').map(req => req.from);
+    res.json(pending);
+  } catch (err) {
+    console.error('Get requests error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// --- GROUP ENDPOINTS ---
+
+app.post('/groups', async (req, res) => {
+  try {
+    const { name, members, admin } = req.body;
+    
+    const adminUser = await User.findOne({ username: admin });
+    if (!adminUser) return res.status(404).json({ error: 'Admin user not found' });
+
+    // Find all users from the members array
+    const memberUsers = await User.find({ username: { $in: members } });
+    const memberIds = memberUsers.map(u => u._id);
+    
+    // Add admin to members if not already there
+    if (!memberIds.some(id => id.toString() === adminUser._id.toString())) {
+       memberIds.push(adminUser._id);
+    }
+
+    const newGroup = new Group({
+      name,
+      members: memberIds,
+      admins: [adminUser._id]
+    });
+
+    await newGroup.save();
+
+    // Also update all members' 'groups' array
+    await User.updateMany(
+      { _id: { $in: memberIds } },
+      { $push: { groups: newGroup._id } }
+    );
+
+    res.status(201).json(newGroup);
+  } catch (err) {
+    console.error('Create group error:', err);
+    res.status(500).json({ error: 'Failed to create group' });
+  }
+});
+
+app.get('/groups/:username', async (req, res) => {
+  try {
+    const user = await User.findOne({ username: req.params.username }).populate('groups');
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    
+    // The frontend expects group object to have 'name' and 'members' array (usernames)
+    // We should probably populate members to send usernames, or just send group names 
+    // depending on what the frontend actually needs. Let's populate members inside groups.
+    const populatedUser = await User.findOne({ username: req.params.username }).populate({
+      path: 'groups',
+      populate: { path: 'members', select: 'username' }
+    });
+
+    // Format for frontend
+    const formattedGroups = populatedUser.groups.map(g => ({
+      _id: g._id,
+      name: g.name,
+      members: g.members.map(m => m.username)
+    }));
+
+    res.json(formattedGroups);
+  } catch (err) {
+    console.error('Get groups error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
 
 // Socket.io Logic
 const users = {}; 
