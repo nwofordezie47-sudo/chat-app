@@ -8,6 +8,7 @@ import { Server } from 'socket.io';
 import Group from './models/Group.js';
 import Message from './models/Message.js';
 import User from './models/User.js';
+import uploadRoute from './routes/upload.js';
 // Expo SDK Import
 import { Expo } from 'expo-server-sdk';
 
@@ -30,6 +31,7 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+app.use('/upload', uploadRoute);
 
 
 app.use((req, res, next) => {
@@ -346,9 +348,12 @@ io.on('connection', (socket) => {
     io.emit('user_list', Object.values(users)); 
   });
 
-  // ... (join_room, join_private)
+  socket.on('join_room', (room) => {
+    socket.join(room);
+    console.log(`User ${socket.id} joined room ${room}`);
+  });
 
-  socket.on('send_message', async (data) => {
+  socket.on('send_message', async (data, callback) => {
     try {
       const newMessage = new Message(data);
       await newMessage.save();
@@ -380,12 +385,25 @@ io.on('connection', (socket) => {
         }
       }
 
+      if (typeof callback === 'function') {
+        callback({ status: 'ok' });
+      }
+
     } catch (err) {
       console.error('Error in send_message:', err);
+      if (typeof callback === 'function') {
+        callback({ status: 'error' });
+      }
     }
   });
 
-  // ... (typing)
+  socket.on('typing', (data) => {
+    socket.to(data.room).emit('user_typing', data);
+  });
+
+  socket.on('stop_typing', (data) => {
+    socket.to(data.room).emit('user_stopped_typing', data);
+  });
 
   socket.on('friend_request', async ({ to, from }) => {
     // Socket emit
