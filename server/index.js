@@ -8,6 +8,9 @@ import { Server } from 'socket.io';
 import Group from './models/Group.js';
 import Message from './models/Message.js';
 import User from './models/User.js';
+import feedRoute from './routes/feed.js';
+import personalSpaceRoute from './routes/personalSpace.js';
+import storiesRoute from './routes/stories.js';
 import uploadRoute from './routes/upload.js';
 // Expo SDK Import
 import { Expo } from 'expo-server-sdk';
@@ -32,6 +35,9 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use('/upload', uploadRoute);
+app.use('/personal-space', personalSpaceRoute);
+app.use('/feed', feedRoute);
+app.use('/stories', storiesRoute);
 
 
 app.use((req, res, next) => {
@@ -148,6 +154,35 @@ app.post('/user/push-token', async (req, res) => {
     res.json({ message: 'Push token updated' });
   } catch (err) {
     console.error('Error saving push token:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// --- USER PROFILE ENDPOINTS ---
+
+app.get('/user/profile/:username', async (req, res) => {
+  try {
+    const user = await User.findOne({ username: req.params.username }).select('-password');
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    res.json(user);
+  } catch (err) {
+    console.error('Profile fetch error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.put('/user/profile', async (req, res) => {
+  try {
+    const { username, bio, profilePic } = req.body;
+    let updateFields = {};
+    if (bio !== undefined) updateFields.bio = bio;
+    if (profilePic !== undefined) updateFields.profilePic = profilePic;
+
+    const user = await User.findOneAndUpdate({ username }, updateFields, { new: true }).select('-password');
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    res.json(user);
+  } catch (err) {
+    console.error('Profile update error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -432,7 +467,46 @@ io.on('connection', (socket) => {
     }
   });
 
-  // ... (rest)
+  // --- VOICE CALLING SOCKET LOGIC ---
+
+  socket.on('initiate_call', async (data) => {
+    // data: { from: 'caller_username', to: 'receiver_username', channelName: 'room_id' }
+    const targetSocketId = Object.keys(users).find(key => users[key] === data.to);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit('incoming_call', data);
+    }
+  });
+
+  socket.on('accept_call', (data) => {
+    // data: { from: 'receiver_username', to: 'caller_username', channelName: 'room_id' }
+    const targetSocketId = Object.keys(users).find(key => users[key] === data.to);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit('call_accepted', data);
+    }
+  });
+
+  socket.on('reject_call', (data) => {
+    // data: { from: 'receiver_username', to: 'caller_username' }
+    const targetSocketId = Object.keys(users).find(key => users[key] === data.to);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit('call_rejected', data);
+    }
+  });
+
+  socket.on('end_call', (data) => {
+    // data: { to: 'other_username' }
+    const targetSocketId = Object.keys(users).find(key => users[key] === data.to);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit('call_ended');
+    }
+  });
+
+  socket.on('disconnect', () => {
+    console.log('User disconnected:', socket.id);
+    delete users[socket.id];
+    io.emit('user_list', Object.values(users));
+  });
+
 });
 
 
