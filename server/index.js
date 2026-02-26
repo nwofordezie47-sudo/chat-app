@@ -12,6 +12,7 @@ import feedRoute from './routes/feed.js';
 import personalSpaceRoute from './routes/personalSpace.js';
 import storiesRoute from './routes/stories.js';
 import uploadRoute from './routes/upload.js';
+import agoraTokenRoute from './routes/agora.js';
 // Expo SDK Import
 import { Expo } from 'expo-server-sdk';
 
@@ -38,6 +39,7 @@ app.use('/upload', uploadRoute);
 app.use('/personal-space', personalSpaceRoute);
 app.use('/feed', feedRoute);
 app.use('/stories', storiesRoute);
+app.use('/agora-token', agoraTokenRoute);
 
 
 app.use((req, res, next) => {
@@ -379,8 +381,13 @@ io.on('connection', (socket) => {
 
   socket.on('login', async (username) => {
     users[socket.id] = username;
-    // Update socket ID mapping? Ideally we use DB for push tokens so we just need to know who is who.
-    io.emit('user_list', Object.values(users)); 
+    // Broadcast to all clients
+    io.emit('update_user_list', Object.values(users)); 
+  });
+
+  socket.on('get_online_users', () => {
+    // Send back to the requesting client
+    socket.emit('update_user_list', Object.values(users));
   });
 
   socket.on('join_room', (room) => {
@@ -504,7 +511,7 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     console.log('User disconnected:', socket.id);
     delete users[socket.id];
-    io.emit('user_list', Object.values(users));
+    io.emit('update_user_list', Object.values(users));
   });
 
 });

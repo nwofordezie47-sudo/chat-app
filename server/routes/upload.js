@@ -17,32 +17,32 @@ cloudinary.config({
 
 router.post('/', upload.single('file'), async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'No file uploaded' });
+    const { base64, mimeType } = req.body;
+    
+    if (!req.file && !base64) {
+      return res.status(400).json({ error: 'No file or base64 data uploaded' });
     }
 
-    // Wrap Cloudinary's stream uploader in a promise to await it
-    const uploadStream = () => {
-      return new Promise((resolve, reject) => {
-        const stream = cloudinary.uploader.upload_stream(
-          {
-            resource_type: 'auto', // Automatically detects audio vs image
-            folder: 'messaging_app_media'
-          },
-          (error, result) => {
-            if (result) {
-              resolve(result);
-            } else {
-              reject(error);
-            }
-          }
-        );
-        // Write the Buffer from multer into the stream
-        stream.end(req.file.buffer);
-      });
-    };
-
-    const result = await uploadStream();
+    const result = await new Promise((resolve, reject) => {
+        if (base64) {
+             // Handle native React Native Base64 payload
+             const dataUri = `data:${mimeType || 'auto'};base64,${base64}`;
+             cloudinary.uploader.upload(dataUri, { resource_type: 'auto', folder: 'messaging_app_media' }, (error, result) => {
+                 if (result) resolve(result); 
+                 else reject(error);
+             });
+        } else {
+             // Handle regular web FormData payload
+             const stream = cloudinary.uploader.upload_stream(
+               { resource_type: 'auto', folder: 'messaging_app_media' },
+               (error, result) => { 
+                   if (result) resolve(result); 
+                   else reject(error); 
+               }
+             );
+             stream.end(req.file.buffer);
+        }
+    });
     
     // Send back the secure URL
     res.json({ url: result.secure_url });
