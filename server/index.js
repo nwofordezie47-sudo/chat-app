@@ -285,18 +285,18 @@ app.get('/friends/:username', async (req, res) => {
     // Fetch last message for each friend
     const friendsWithMessages = await Promise.all(user.friends.map(async (friend) => {
         const roomName = [user.username, friend.username].sort().join('_');
-        const lastMessage = await Message.findOne({ room: roomName }).sort({ createdAt: -1 });
+        const lastMessage = await Message.findOne({ room: roomName }).sort({ _id: -1 }); // Sorting by _id gives chronological order if createdAt is missing
         
         return {
             _id: friend._id,
             username: friend.username,
             profilePic: friend.profilePic,
             lastMessage: lastMessage ? {
-                text: lastMessage.text,
-                createdAt: lastMessage.createdAt,
-                type: lastMessage.type,
-                fileUrl: lastMessage.fileUrl,
-                sender: lastMessage.sender,
+                text: lastMessage.message,
+                createdAt: lastMessage.time,
+                type: lastMessage.fileType,
+                fileUrl: lastMessage.file,
+                sender: lastMessage.author,
             } : null
         };
     }));
@@ -428,6 +428,18 @@ io.on('connection', (socket) => {
       await newMessage.save();
 
       socket.to(data.room).emit('receive_message', data);
+      
+      // Emit a global event for the Friends screen to update its recent messages list
+      io.emit('recent_message_update', {
+          room: data.room,
+          message: {
+              text: data.message,
+              createdAt: data.time,
+              type: data.fileType,
+              fileUrl: data.file,
+              sender: data.author,
+          }
+      });
 
       // Push Notification Logic
       // 1. Identify recipients
