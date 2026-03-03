@@ -25,6 +25,7 @@
     "express": "^5.2.1",
     "mongoose": "^9.2.1",
     "multer": "^2.0.2",
+    "nodemailer": "^8.0.1",
     "socket.io": "^4.8.1",
     "socket.io-client": "^4.8.1",
     "toastify-js": "^1.12.0"
