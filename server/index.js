@@ -301,6 +301,14 @@ app.get('/friends/:username', async (req, res) => {
         };
     }));
 
+    // Sort friends by last action (most recent first)
+    // If there is no last message, we can push them to the bottom by giving them a very old timestamp or 0
+    friendsWithMessages.sort((a, b) => {
+        const timeA = a.lastMessage && a.lastMessage.createdAt ? new Date(a.lastMessage.createdAt).getTime() : 0;
+        const timeB = b.lastMessage && b.lastMessage.createdAt ? new Date(b.lastMessage.createdAt).getTime() : 0;
+        return timeB - timeA;
+    });
+
     res.json(friendsWithMessages);
   } catch (err) {
     console.error('Get friends error:', err);
