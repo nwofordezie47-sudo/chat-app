@@ -68,7 +68,7 @@ router.get('/tasks/:username', async (req, res) => {
 // Create a task
 router.post('/tasks', async (req, res) => {
     try {
-        const { username, title, description, dueDate, type } = req.body;
+        const { username, title, description, dueDate, type, priority } = req.body;
         const user = await User.findOne({ username });
         if (!user) return res.status(404).json({ error: 'User not found' });
 
@@ -77,6 +77,7 @@ router.post('/tasks', async (req, res) => {
             title,
             description,
             dueDate,
+            priority: priority || 'normal',
             type
         });
 

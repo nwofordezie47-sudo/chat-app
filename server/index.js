@@ -18,6 +18,7 @@ import { Expo } from 'expo-server-sdk';
 
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { sendLoginAlertEmail, sendWelcomeEmail } from './utils/mailer.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -114,6 +115,9 @@ app.post('/register', async (req, res) => {
     delete userData.password;
     
     res.status(201).json(userData);
+
+    // Send welcome email asynchronously
+    sendWelcomeEmail(email, username);
   } catch (err) {
     console.error('Registration error:', err);
     res.status(500).json({ error: 'Server error during registration' });
@@ -140,6 +144,9 @@ app.post('/login', async (req, res) => {
     delete userData.password;
     
     res.json(userData);
+
+    // Send login alert email asynchronously
+    sendLoginAlertEmail(user.email, username);
   } catch (err) {
     console.error('Login error:', err);
     res.status(500).json({ error: 'Server error during login' });
@@ -274,7 +281,27 @@ app.get('/friends/:username', async (req, res) => {
   try {
     const user = await User.findOne({ username: req.params.username }).populate('friends', 'username profilePic');
     if (!user) return res.status(404).json({ error: 'User not found' });
-    res.json(user.friends);
+    
+    // Fetch last message for each friend
+    const friendsWithMessages = await Promise.all(user.friends.map(async (friend) => {
+        const roomName = [user.username, friend.username].sort().join('_');
+        const lastMessage = await Message.findOne({ room: roomName }).sort({ createdAt: -1 });
+        
+        return {
+            _id: friend._id,
+            username: friend.username,
+            profilePic: friend.profilePic,
+            lastMessage: lastMessage ? {
+                text: lastMessage.text,
+                createdAt: lastMessage.createdAt,
+                type: lastMessage.type,
+                fileUrl: lastMessage.fileUrl,
+                sender: lastMessage.sender,
+            } : null
+        };
+    }));
+
+    res.json(friendsWithMessages);
   } catch (err) {
     console.error('Get friends error:', err);
     res.status(500).json({ error: 'Server error' });

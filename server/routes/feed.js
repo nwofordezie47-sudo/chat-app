@@ -15,6 +15,7 @@ router.get('/:username', async (req, res) => {
 
         const posts = await FeedPost.find({ user: { $in: targetUserIds } })
             .populate('user', 'username profilePic bio')
+            .populate('likes', 'username')
             .sort({ createdAt: -1 })
             .limit(50);
 
@@ -33,6 +34,7 @@ router.get('/user/:username', async (req, res) => {
 
         const posts = await FeedPost.find({ user: user._id })
             .populate('user', 'username profilePic bio')
+            .populate('likes', 'username')
             .sort({ createdAt: -1 });
 
         res.json(posts);
@@ -75,9 +77,10 @@ router.put('/:id/like', async (req, res) => {
         
         if (!user || !post) return res.status(404).json({ error: 'Not found' });
 
-        const hasLiked = post.likes.includes(user._id);
+        const userIdStr = user._id.toString();
+        const hasLiked = post.likes.some(id => id.toString() === userIdStr);
         if (hasLiked) {
-            post.likes = post.likes.filter(id => id.toString() !== user._id.toString());
+            post.likes = post.likes.filter(id => id.toString() !== userIdStr);
         } else {
             post.likes.push(user._id);
         }
