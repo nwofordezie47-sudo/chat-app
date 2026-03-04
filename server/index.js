@@ -400,7 +400,7 @@ app.get('/groups/:username', async (req, res) => {
 
 app.get('/messages/:room', async (req, res) => {
   try {
-    const messages = await Message.find({ room: req.params.room }).sort({ createdAt: 1 });
+    const messages = await Message.find({ room: req.params.room }).sort({ time: 1 });
     res.json(messages);
   } catch (err) {
     console.error('Get messages error:', err);
