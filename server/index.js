@@ -371,22 +371,31 @@ app.post('/groups', async (req, res) => {
 
 app.get('/groups/:username', async (req, res) => {
   try {
-    const user = await User.findOne({ username: req.params.username }).populate('groups');
-    if (!user) return res.status(404).json({ error: 'User not found' });
-    
-    // The frontend expects group object to have 'name' and 'members' array (usernames)
-    // We should probably populate members to send usernames, or just send group names 
-    // depending on what the frontend actually needs. Let's populate members inside groups.
     const populatedUser = await User.findOne({ username: req.params.username }).populate({
       path: 'groups',
-      populate: { path: 'members', select: 'username' }
+      populate: { path: 'members', select: 'username profilePic' }
     });
+    
+    if (!populatedUser) return res.status(404).json({ error: 'User not found' });
 
-    // Format for frontend
-    const formattedGroups = populatedUser.groups.map(g => ({
-      _id: g._id,
-      name: g.name,
-      members: g.members.map(m => m.username)
+    // Format for frontend and fetch last messages
+    const formattedGroups = await Promise.all(populatedUser.groups.map(async (g) => {
+      const lastMessage = await Message.findOne({ room: g.name }).sort({ _id: -1 });
+
+      return {
+        _id: g._id,
+        name: g.name,
+        groupPic: g.groupPic || '',
+        isGroup: true,
+        members: g.members.map(m => m.username),
+        lastMessage: lastMessage ? {
+            text: lastMessage.message,
+            createdAt: lastMessage.time,
+            type: lastMessage.fileType,
+            fileUrl: lastMessage.file,
+            sender: lastMessage.author,
+        } : null
+      };
     }));
 
     res.json(formattedGroups);
@@ -437,9 +446,21 @@ io.on('connection', (socket) => {
 
       socket.to(data.room).emit('receive_message', data);
       
+      // Determine recipients for this message
+      let recipientList = [];
+      if (data.room.includes('_')) {
+          recipientList = data.room.split('_');
+      } else {
+          const groupInfo = await Group.findOne({ name: data.room }).populate('members');
+          if (groupInfo) {
+              recipientList = groupInfo.members.map(m => m.username);
+          }
+      }
+
       // Emit a global event for the Friends screen to update its recent messages list
       io.emit('recent_message_update', {
           room: data.room,
+          recipients: recipientList,
           message: {
               text: data.message,
               createdAt: data.time,
