@@ -8,6 +8,7 @@ import { Server } from 'socket.io';
 import Group from './models/Group.js';
 import Message from './models/Message.js';
 import User from './models/User.js';
+import Streak from './models/Streak.js';
 import feedRoute from './routes/feed.js';
 import personalSpaceRoute from './routes/personalSpace.js';
 import storiesRoute from './routes/stories.js';
@@ -279,24 +280,29 @@ app.post('/friends/accept', async (req, res) => {
 
 app.get('/friends/:username', async (req, res) => {
   try {
-    const user = await User.findOne({ username: req.params.username }).populate('friends', 'username profilePic');
+    const user = await User.findOne({ username: req.params.username }).populate('friends', 'username profilePic shotScore');
     if (!user) return res.status(404).json({ error: 'User not found' });
     
-    // Fetch last message for each friend
+    // Fetch last message for each friend & check streaks
     const friendsWithMessages = await Promise.all(user.friends.map(async (friend) => {
         const roomName = [user.username, friend.username].sort().join('_');
-        const lastMessage = await Message.findOne({ room: roomName }).sort({ _id: -1 }); // Sorting by _id gives chronological order if createdAt is missing
+        const lastMessage = await Message.findOne({ room: roomName, $or: [{ expiresAt: { $exists: false } }, { expiresAt: { $gt: new Date() } }] }).sort({ _id: -1 });
         
+        const streak = await Streak.findOne({ room: roomName });
+
         return {
             _id: friend._id,
             username: friend.username,
             profilePic: friend.profilePic,
+            shotScore: friend.shotScore,
+            streak: streak ? streak.count : 0,
             lastMessage: lastMessage ? {
                 text: lastMessage.message,
                 createdAt: lastMessage.time,
                 type: lastMessage.fileType,
                 fileUrl: lastMessage.file,
                 sender: lastMessage.author,
+                read: lastMessage.read
             } : null
         };
     }));
@@ -334,7 +340,7 @@ app.get('/friends/requests/:username', async (req, res) => {
 
 app.post('/groups', async (req, res) => {
   try {
-    const { name, members, admin } = req.body;
+    const { name, members, admin, description, groupPic } = req.body;
     
     const adminUser = await User.findOne({ username: admin });
     if (!adminUser) return res.status(404).json({ error: 'Admin user not found' });
@@ -350,6 +356,8 @@ app.post('/groups', async (req, res) => {
 
     const newGroup = new Group({
       name,
+      description: description || '',
+      groupPic: groupPic || '',
       members: memberIds,
       admins: [adminUser._id]
     });
@@ -366,6 +374,112 @@ app.post('/groups', async (req, res) => {
   } catch (err) {
     console.error('Create group error:', err);
     res.status(500).json({ error: 'Failed to create group' });
+  }
+});
+
+app.get('/groups/details/:name', async (req, res) => {
+  try {
+    const group = await Group.findOne({ name: req.params.name }).populate('members', 'username profilePic').populate('admins', 'username');
+    if (!group) return res.status(404).json({ error: 'Group not found' });
+    res.json(group);
+  } catch (err) {
+    console.error('Get group details error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.put('/groups/:id', async (req, res) => {
+  try {
+    const { name, description, groupPic } = req.body;
+    let updateFields = {};
+    if (name) updateFields.name = name;
+    if (description !== undefined) updateFields.description = description;
+    if (groupPic !== undefined) updateFields.groupPic = groupPic;
+
+    const updatedGroup = await Group.findByIdAndUpdate(req.params.id, updateFields, { new: true });
+    if (!updatedGroup) return res.status(404).json({ error: 'Group not found' });
+    
+    res.json(updatedGroup);
+  } catch (err) {
+    console.error('Update group error:', err);
+    res.status(500).json({ error: 'Failed to update group' });
+  }
+});
+
+app.delete('/groups/:id', async (req, res) => {
+  try {
+    const group = await Group.findById(req.params.id);
+    if (!group) return res.status(404).json({ error: 'Group not found' });
+    
+    // Remove group reference from all members
+    await User.updateMany(
+      { groups: group._id },
+      { $pull: { groups: group._id } }
+    );
+    
+    // Delete all messages in the group room
+    await Message.deleteMany({ room: group.name });
+    
+    // Finally, run delete on the group document itself
+    await Group.findByIdAndDelete(req.params.id);
+
+    res.json({ message: 'Group deleted successfully' });
+  } catch (err) {
+    console.error('Delete group error:', err);
+    res.status(500).json({ error: 'Failed to delete group' });
+  }
+});
+
+app.put('/groups/:id/add-members', async (req, res) => {
+  try {
+    const { members } = req.body; // array of usernames
+    const memberUsers = await User.find({ username: { $in: members } });
+    const memberIds = memberUsers.map(u => u._id);
+
+    const group = await Group.findById(req.params.id);
+    if (!group) return res.status(404).json({ error: 'Group not found' });
+
+    // Add only new members
+    const newMemberIds = memberIds.filter(id => !group.members.includes(id));
+    group.members.push(...newMemberIds);
+    await group.save();
+
+    // Update the groups array for the new members
+    await User.updateMany(
+      { _id: { $in: newMemberIds } },
+      { $push: { groups: group._id } }
+    );
+
+    res.json(group);
+  } catch (err) {
+    console.error('Add members error:', err);
+    res.status(500).json({ error: 'Failed to add members' });
+  }
+});
+
+app.put('/groups/:id/remove-member', async (req, res) => {
+  try {
+    const { username } = req.body;
+    const userToRemove = await User.findOne({ username });
+    if (!userToRemove) return res.status(404).json({ error: 'User not found' });
+
+    const group = await Group.findById(req.params.id);
+    if (!group) return res.status(404).json({ error: 'Group not found' });
+
+    group.members = group.members.filter(id => id.toString() !== userToRemove._id.toString());
+    
+    // If they were an admin, remove from admins too
+    group.admins = group.admins.filter(id => id.toString() !== userToRemove._id.toString());
+    await group.save();
+
+    // Remove from user's groups array
+    userToRemove.groups = userToRemove.groups.filter(id => id.toString() !== group._id.toString());
+    await userToRemove.save();
+
+    res.json(group);
+  } catch (err) {
+    console.error('Remove member error:', err);
+    res.status(500).json({ error: 'Failed to remove member' });
   }
 });
 
@@ -394,6 +508,7 @@ app.get('/groups/:username', async (req, res) => {
             type: lastMessage.fileType,
             fileUrl: lastMessage.file,
             sender: lastMessage.author,
+            read: lastMessage.read
         } : null
       };
     }));
@@ -409,7 +524,15 @@ app.get('/groups/:username', async (req, res) => {
 
 app.get('/messages/:room', async (req, res) => {
   try {
-    const messages = await Message.find({ room: req.params.room }).sort({ time: 1 });
+    const now = new Date();
+    // Fetch messages, excluding expired shots
+    const messages = await Message.find({ 
+      room: req.params.room,
+      $or: [
+        { expiresAt: { $exists: false } },
+        { expiresAt: { $gt: now } }
+      ]
+    }).sort({ time: 1 });
     res.json(messages);
   } catch (err) {
     console.error('Get messages error:', err);
@@ -441,10 +564,59 @@ io.on('connection', (socket) => {
 
   socket.on('send_message', async (data, callback) => {
     try {
+      if (data.fileType === 'shot') {
+          // Set expiration to 48 hours and update user shot score
+          data.expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
+          await User.updateOne({ username: data.author }, { $inc: { shotScore: 1 } });
+          io.emit('shot_score_update', { username: data.author });
+
+          // Handle Streaks for 1-on-1 chats
+          if (data.room.includes('_')) {
+             let streak = await Streak.findOne({ room: data.room });
+             if (!streak) {
+                 streak = new Streak({ room: data.room, count: 0 });
+             }
+
+             const now = new Date();
+             const users = data.room.split('_');
+             const otherUser = users.find(u => u !== data.author);
+
+             const isUser1 = users[0] === data.author;
+             
+             if (isUser1) {
+                 streak.lastShotUser1 = now;
+             } else {
+                 streak.lastShotUser2 = now;
+             }
+
+             // If both have sent a shot within 24 hours
+             if (streak.lastShotUser1 && streak.lastShotUser2) {
+                 const timeDiff = Math.abs(streak.lastShotUser1.getTime() - streak.lastShotUser2.getTime());
+                 const diffHours = timeDiff / (1000 * 3600);
+                 
+                 const lastUpdateDiff = streak.lastStreakUpdate ? (now.getTime() - streak.lastStreakUpdate.getTime()) / (1000 * 3600) : 25;
+
+                 if (diffHours <= 24 && lastUpdateDiff > 24) {
+                     streak.count += 1;
+                     streak.lastStreakUpdate = now;
+                     io.emit('streak_updated', { room: data.room, streak: streak.count });
+                 }
+             }
+             await streak.save();
+          }
+      }
+
+      data.read = false; // default for new messages
       const newMessage = new Message(data);
       await newMessage.save();
 
-      socket.to(data.room).emit('receive_message', data);
+      // Return the generated ObjectId to sender
+      if (typeof callback === 'function') {
+        callback({ status: 'ok', _id: newMessage._id });
+        callback = null; // Prevent double call
+      }
+
+      socket.to(data.room).emit('receive_message', { ...data, _id: newMessage._id });
       
       // Determine recipients for this message
       let recipientList = [];
@@ -467,36 +639,36 @@ io.on('connection', (socket) => {
               type: data.fileType,
               fileUrl: data.file,
               sender: data.author,
+              read: false
           }
       });
 
       // Push Notification Logic
       // 1. Identify recipients
-      // If room has underscore, it's private.
+      // ... same push notification logic ...
       if (data.room.includes('_')) {
         const parts = data.room.split('_');
-        const receiverUsername = parts.find(u => u !== data.sender);
+        const receiverUsername = parts.find(u => u !== data.author);
         
         if (receiverUsername) {
              const receiverUser = await User.findOne({ username: receiverUsername });
              if (receiverUser && receiverUser.pushToken) {
-                 await sendPushNotification(receiverUser.pushToken, `New Message from ${data.sender}`, data.text || 'Sent an attachment', { type: 'message', room: data.room });
+                 await sendPushNotification(receiverUser.pushToken, `New Message from ${data.author}`, data.message || (data.fileType === 'shot' ? 'Sent a shot!' : 'Sent an attachment'), { type: 'message', room: data.room });
              }
         }
       } else {
-        // Group logic (simplified for now, might need optimization for large groups)
         const group = await Group.findOne({ name: data.room }).populate('members');
         if (group) {
             for (const member of group.members) {
-                if (member.username !== data.sender && member.pushToken) {
-                     await sendPushNotification(member.pushToken, `#${data.room}: ${data.sender}`, data.text || 'Sent an attachment', { type: 'message', room: data.room });
+                if (member.username !== data.author && member.pushToken) {
+                     await sendPushNotification(member.pushToken, `#${data.room}: ${data.author}`, data.message || 'Sent an attachment', { type: 'message', room: data.room });
                 }
             }
         }
       }
 
       if (typeof callback === 'function') {
-        callback({ status: 'ok' });
+        callback({ status: 'ok', _id: newMessage._id });
       }
 
     } catch (err) {
@@ -505,6 +677,20 @@ io.on('connection', (socket) => {
         callback({ status: 'error' });
       }
     }
+  });
+
+  socket.on('mark_read', async ({ room, username }) => {
+     try {
+         await Message.updateMany(
+             { room, author: { $ne: username }, read: false },
+             { $set: { read: true } }
+         );
+         
+         socket.to(room).emit('messages_read', { room, byId: username });
+         io.emit('global_read_update', { room, reader: username });
+     } catch(e) {
+         console.error('Error marking messages as read:', e);
+     }
   });
 
   socket.on('typing', (data) => {
@@ -560,15 +746,44 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('reject_call', (data) => {
+  socket.on('reject_call', async (data) => {
     // data: { from: 'receiver_username', to: 'caller_username' }
     const targetSocketId = Object.keys(users).find(key => users[key] === data.to);
     if (targetSocketId) {
       io.to(targetSocketId).emit('call_rejected', data);
     }
+    
+    // Create Missed Call system message
+    try {
+        const roomName = [data.from, data.to].sort().join('_');
+        const missedCallMsg = new Message({
+            room: roomName,
+            author: data.from, // Not exactly the author, but 'from' in reject_call stands for the receiver
+            message: 'Missed voice call',
+            fileType: 'missed_call',
+            time: new Date().toISOString(),
+            read: false
+        });
+        await missedCallMsg.save();
+
+        io.emit('recent_message_update', {
+          room: roomName,
+          recipients: [data.from, data.to],
+          message: {
+              text: 'Missed voice call',
+              createdAt: missedCallMsg.time,
+              type: 'missed_call',
+              sender: data.to, // To show it clearly as missed from caller
+              read: false
+          }
+        });
+        
+    } catch(e) {
+        console.error('Failed to log missed call:', e);
+    }
   });
 
-  socket.on('end_call', (data) => {
+  socket.on('end_call', async (data) => {
     // data: { to: 'other_username' }
     const targetSocketId = Object.keys(users).find(key => users[key] === data.to);
     if (targetSocketId) {
