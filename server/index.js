@@ -550,6 +550,45 @@ app.get('/messages/:room', async (req, res) => {
   }
 });
 
+app.get('/messages/:room/shots', async (req, res) => {
+  try {
+    const now = new Date();
+    const shots = await Message.find({ 
+      room: req.params.room,
+      fileType: 'shot',
+      $or: [
+        { expiresAt: { $exists: false } },
+        { expiresAt: { $gt: now } }
+      ]
+    }).sort({ time: 1 });
+    res.json(shots);
+  } catch (err) {
+    console.error('Get shots error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.delete('/messages/:id', async (req, res) => {
+  try {
+    await Message.findByIdAndDelete(req.params.id);
+    res.json({ message: 'Message deleted' });
+  } catch (err) {
+    console.error('Delete message error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.patch('/messages/:id', async (req, res) => {
+  try {
+    const { message } = req.body;
+    const updated = await Message.findByIdAndUpdate(req.params.id, { message }, { new: true });
+    res.json(updated);
+  } catch (err) {
+    console.error('Edit message error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // Socket.io Logic
 const users = {}; 
 
@@ -689,12 +728,29 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('mark_read', async ({ room, username }) => {
-     try {
-         await Message.updateMany(
-             { room, author: { $ne: username }, read: false },
-             { $set: { read: true } }
-         );
+      socket.on('mark_read', async ({ room, username }) => {
+          try {
+              // Set expiresAt for any unread shots being marked as read that aren't saved
+              const unreadShots = await Message.find({ 
+                room, 
+                author: { $ne: username }, 
+                read: false, 
+                fileType: 'shot',
+                saved: false 
+              });
+              
+              if (unreadShots.length > 0) {
+                 const tenSecondsFromNow = new Date(Date.now() + 1000 * 10);
+                 await Message.updateMany(
+                   { _id: { $in: unreadShots.map(s => s._id) } },
+                   { $set: { expiresAt: tenSecondsFromNow } }
+                 );
+              }
+
+              await Message.updateMany(
+                  { room, author: { $ne: username }, read: false },
+                  { $set: { read: true } }
+              );
          
          socket.to(room).emit('messages_read', { room, byId: username });
          io.emit('global_read_update', { room, reader: username });
@@ -745,6 +801,14 @@ io.on('connection', (socket) => {
     } catch (e) {
       console.error('Error saving shot:', e);
     }
+  });
+
+  socket.on('delete_message', (data) => {
+    io.to(data.room).emit('message_deleted', { messageId: data.messageId, room: data.room });
+  });
+
+  socket.on('edit_message', (data) => {
+    io.to(data.room).emit('message_edited', { messageId: data.messageId, room: data.room, newMessage: data.newMessage });
   });
 
   // --- VOICE CALLING SOCKET LOGIC ---
