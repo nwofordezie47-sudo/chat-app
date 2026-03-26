@@ -289,6 +289,8 @@ app.get('/friends/:username', async (req, res) => {
         const lastMessage = await Message.findOne({ room: roomName, $or: [{ expiresAt: { $exists: false } }, { expiresAt: { $gt: new Date() } }] }).sort({ _id: -1 });
         
         const streak = await Streak.findOne({ room: roomName });
+        const unreadCount = await Message.countDocuments({ room: roomName, author: { $ne: user.username }, read: false });
+        const unreadShotsCount = await Message.countDocuments({ room: roomName, author: { $ne: user.username }, read: false, fileType: 'shot' });
 
         return {
             _id: friend._id,
@@ -296,13 +298,16 @@ app.get('/friends/:username', async (req, res) => {
             profilePic: friend.profilePic,
             shotScore: friend.shotScore,
             streak: streak ? streak.count : 0,
+            unreadCount,
+            unreadShotsCount,
             lastMessage: lastMessage ? {
                 text: lastMessage.message,
                 createdAt: lastMessage.time,
                 type: lastMessage.fileType,
                 fileUrl: lastMessage.file,
                 sender: lastMessage.author,
-                read: lastMessage.read
+                read: lastMessage.read,
+                saved: lastMessage.saved
             } : null
         };
     }));
@@ -495,6 +500,8 @@ app.get('/groups/:username', async (req, res) => {
     // Format for frontend and fetch last messages
     const formattedGroups = await Promise.all(populatedUser.groups.map(async (g) => {
       const lastMessage = await Message.findOne({ room: g.name }).sort({ _id: -1 });
+      const unreadCount = await Message.countDocuments({ room: g.name, author: { $ne: populatedUser.username }, read: false });
+      const unreadShotsCount = await Message.countDocuments({ room: g.name, author: { $ne: populatedUser.username }, read: false, fileType: 'shot' });
 
       return {
         _id: g._id,
@@ -502,13 +509,16 @@ app.get('/groups/:username', async (req, res) => {
         groupPic: g.groupPic || '',
         isGroup: true,
         members: g.members.map(m => m.username),
+        unreadCount,
+        unreadShotsCount,
         lastMessage: lastMessage ? {
             text: lastMessage.message,
             createdAt: lastMessage.time,
             type: lastMessage.fileType,
             fileUrl: lastMessage.file,
             sender: lastMessage.author,
-            read: lastMessage.read
+            read: lastMessage.read,
+            saved: lastMessage.saved
         } : null
       };
     }));
@@ -725,6 +735,15 @@ io.on('connection', (socket) => {
     const receiverUser = await User.findOne({ username: to });
     if (receiverUser && receiverUser.pushToken) {
         await sendPushNotification(receiverUser.pushToken, 'Friend Request Accepted', `${from} accepted your friend request!`, { type: 'friend_accept' });
+    }
+  });
+
+  socket.on('save_shot', async (data) => {
+    try {
+      await Message.findByIdAndUpdate(data.messageId, { saved: true });
+      io.to(data.room).emit('shot_saved', { messageId: data.messageId, room: data.room, savedBy: data.username });
+    } catch (e) {
+      console.error('Error saving shot:', e);
     }
   });
 

@@ -9,7 +9,8 @@ const messageSchema = new mongoose.Schema({
   fileType: { type: String },
   time: { type: String, required: true },
   read: { type: Boolean, default: false },
-  expiresAt: { type: Date }
+  expiresAt: { type: Date },
+  saved: { type: Boolean, default: false }
 });
 
 const Message = mongoose.model('Message', messageSchema);
