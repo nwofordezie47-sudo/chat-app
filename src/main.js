@@ -269,16 +269,23 @@ async function joinChat() {
 }
 
 let userGroups = [];
+let userFriends = [];
+let onlineUsersList = [];
+
 async function loadRooms() {
     const serverUrl = import.meta.env.VITE_BACKEND_URL || '';
     try {
-        const res = await fetch(`${serverUrl}/groups/${username}`);
-        if (res.ok) {
-            userGroups = await res.json();
-            updateRoomList();
-        }
+        const [groupsRes, friendsRes] = await Promise.all([
+            fetch(`${serverUrl}/groups/${username}`),
+            fetch(`${serverUrl}/friends/${username}`)
+        ]);
+        
+        if (groupsRes.ok) userGroups = await groupsRes.json();
+        if (friendsRes.ok) userFriends = await friendsRes.json();
+        
+        updateRoomList();
     } catch (e) {
-        console.error("Failed to load groups");
+        console.error("Failed to load rooms");
     }
 }
 
@@ -286,45 +293,169 @@ function updateRoomList() {
     const roomList = document.querySelector('#room-list');
     if (!roomList) return;
     
-    let html = `<p onclick="switchRoom('general')" class="${currentRoom === 'general' ? 'active' : ''}"># General</p>`;
+    // Combine groups and friends for sorting
+    const allChats = [
+        ...userGroups.map(g => ({ ...g, isGroup: true })),
+        ...userFriends.map(f => ({ 
+            ...f, 
+            name: f.username, 
+            isGroup: false, 
+            room: [username, f.username].sort().join('_') 
+        }))
+    ];
+
+    // Sort by recent message
+    allChats.sort((a, b) => {
+        const timeA = a.lastMessage ? new Date(a.lastMessage.createdAt).getTime() : 0;
+        const timeB = b.lastMessage ? new Date(b.lastMessage.createdAt).getTime() : 0;
+        return timeB - timeA;
+    });
+
+    let html = `
+        <div onclick="switchRoom('general')" class="user-item-enhanced ${currentRoom === 'general' ? 'active' : ''}">
+            <div class="avatar-ring">🌐</div>
+            <div style="flex:1;">
+                <div style="font-weight:bold;"># General</div>
+                <div style="font-size:0.8rem; opacity:0.6;">Global Chat</div>
+            </div>
+        </div>
+    `;
     
-    userGroups.forEach(g => {
-        html += `<p onclick="switchRoom('${g.name}', true, '${g._id}')" class="${currentRoom === g.name ? 'active' : ''}">
-            👥 ${g.name}
-        </p>`;
+    allChats.forEach(c => {
+        const roomName = c.isGroup ? c.name : c.room;
+        const displayName = c.isGroup ? c.name : c.username;
+        const icon = c.isGroup ? '👥' : (onlineUsersList.includes(displayName) ? '🟢' : '⚪');
+        
+        html += `
+            <div onclick="switchRoom('${roomName}', ${c.isGroup}, '${c._id || ''}')" class="user-item-enhanced ${currentRoom === roomName ? 'active' : ''}">
+                <div class="avatar-ring">
+                    ${displayName[0].toUpperCase()}
+                    ${!c.isGroup && onlineUsersList.includes(displayName) ? `<div class="online-dot" style="background:#2ecc71;"></div>` : ''}
+                </div>
+                <div style="flex:1;">
+                    <div style="display:flex; align-items:center; gap:5px;">
+                        <span style="font-weight:bold;">${displayName}</span>
+                        ${c.streak > 0 ? `🔥 ${c.streak}` : ''}
+                        ${c.shotScore > 0 ? `🎯 ${c.shotScore}` : ''}
+                    </div>
+                    <div style="font-size:0.8rem; opacity:0.6; display:flex; align-items:center; gap:4px;">
+                        ${c.lastMessage?.type === 'shot' ? '🔫' : ''}
+                        ${c.lastMessage?.type === 'missed_call' ? '📞' : ''}
+                        <span>${c.lastMessage?.text || 'No messages'}</span>
+                    </div>
+                </div>
+                ${c.unreadCount > 0 ? `<div style="background:var(--accent-color); color:white; min-width:18px; height:18px; border-radius:9px; font-size:0.7rem; display:flex; align-items:center; justify-content:center; padding:0 5px;">${c.unreadCount}</div>` : ''}
+            </div>
+        `;
     });
     
     roomList.innerHTML = html;
 }
 
+socket.on('update_user_list', (usersList) => {
+    onlineUsersList = usersList;
+    const sidebarUserList = document.querySelector('#user-list');
+    const forwardListEl = document.querySelector('#forward-user-list');
+    
+    const usersHtml = usersList
+        .filter(u => u !== username)
+        .map(u => {
+            const isOnline = true; // They are in this list, so they are online
+            return `
+            <div class="user-item-enhanced" onclick="startPrivateChat('${u}')">
+                <div class="avatar-ring">
+                    ${u[0].toUpperCase()}
+                    <div class="online-dot" style="background:#2ecc71;"></div>
+                </div>
+                <div style="flex:1;">
+                    <div style="display:flex; align-items:center; gap:5px;">
+                        <span style="font-weight:bold;">${u}</span>
+                    </div>
+                </div>
+            </div>`;
+        })
+        .join('');
+        
+    if (sidebarUserList) sidebarUserList.innerHTML = usersHtml;
+    // ... forward modal handled previously ...
+});
+
 function renderChat() {
   app.innerHTML = `
     <div class="chat-container">
       <aside class="sidebar" id="sidebar">
-        <h3>Chats</h3>
-        <div id="room-list">
-            <p onclick="switchRoom('general')" class="active"># General</p>
+        <div class="tab-bar">
+            <div class="tab-item active" onclick="switchTab('chats')" data-tab="chats">
+                <span>💬</span>
+                <span class="tab-label">CHATS</span>
+            </div>
+            <div class="tab-item" onclick="switchTab('feed')" data-tab="feed">
+                <span>📸</span>
+                <span class="tab-label">FEED</span>
+            </div>
+            <div class="tab-item" onclick="switchTab('space')" data-tab="space">
+                <span>🌌</span>
+                <span class="tab-label">SPACE</span>
+            </div>
+            <div class="tab-item" onclick="switchTab('settings')" data-tab="settings">
+                <span>👤</span>
+                <span class="tab-label">ME</span>
+            </div>
         </div>
-        <br>
-        <h3>Online Users</h3>
-        <div id="user-list"></div>
-        <br>
-        <div style="margin-top:auto; font-size:0.8em; opacity:0.6;">
+
+        <div id="chats-view" class="view-section active">
+            <div style="padding: 15px; display:flex; justify-content:space-between; align-items:center;">
+                <h2 style="margin:0;">Chats</h2>
+                <button onclick="showFindFriends()" style="background:none; border:none; color:var(--accent-color); font-size:1.5rem; cursor:pointer;">➕</button>
+            </div>
+            <div id="room-list"></div>
+            <br>
+            <h3 style="padding: 0 15px;">Online Users</h3>
+            <div id="user-list"></div>
+        </div>
+
+        <div id="feed-view" class="view-section">
+            <div style="padding: 20px;">
+                <h2>Social Feed</h2>
+                <div id="feed-container"></div>
+            </div>
+        </div>
+
+        <div id="space-view" class="view-section">
+            <div style="padding: 20px;">
+                <h2>Space / Stories</h2>
+                <div id="stories-container"></div>
+            </div>
+        </div>
+
+        <div id="settings-view" class="view-section">
+            <div style="padding: 20px; text-align:center;">
+                <div class="call-avatar" style="margin: 0 auto 1rem;">${username[0].toUpperCase()}</div>
+                <h2>${username}</h2>
+                <button onclick="toggleTheme()" id="theme-btn-main" style="margin: 20px 0; width: 100%;">Toggle Theme</button>
+                <button onclick="location.reload()" style="background:#e74c3c; color:white; width: 100%;">Logout</button>
+            </div>
+        </div>
+
+        <div style="margin-top:auto; padding: 10px; font-size:0.8em; opacity:0.6; border-top: 1px solid var(--glass-border);">
           Logged in as: <b>${username}</b>
         </div>
       </aside>
+
       <main class="chat-area">
         <header class="chat-header" id="chat-header">
           <div style="display:flex; align-items:center; gap: 15px;">
             <button class="menu-btn" onclick="toggleSidebar()">☰</button>
             <h3 id="chat-title"># general</h3>
           </div>
-          <div id="header-actions">
-              <!-- Settings icon for groups will appear here -->
+          <div id="header-actions" style="display:flex; gap: 15px; align-items:center;">
+              <button onclick="startCall('voice')" class="header-icon">📞</button>
+              <button onclick="startCall('video')" class="header-icon">📹</button>
+              <button id="group-settings-btn" class="header-icon" style="display:none;">⚙️</button>
           </div>
         </header>
         <div class="message-list" id="message-list"></div>
-        <div id="typing-indicator" style="padding: 0 2rem; color: var(--text-secondary); font-size: 0.8rem; height: 1.2rem;"></div>
+        <div id="typing-indicator" style="padding: 0 2rem; color: var(--secondary-text); font-size: 0.8rem; height: 1.2rem;"></div>
         <div class="input-area">
           <label for="file-input" class="file-btn">📎</label>
           <input type="file" id="file-input" style="display:none" accept="image/*" />
@@ -344,7 +475,89 @@ function renderChat() {
   document.querySelector('#message-input').addEventListener('input', () => {
     socket.emit('typing', { room: currentRoom, user: username });
   });
+  
+  updateRoomList();
 }
+
+async function fetchFeed() {
+    const container = document.querySelector('#feed-container');
+    container.innerHTML = '<p style="text-align:center; opacity:0.5;">Loading feed...</p>';
+    const serverUrl = import.meta.env.VITE_BACKEND_URL || '';
+    try {
+        const res = await fetch(`${serverUrl}/feed/${username}`);
+        if (res.ok) {
+            const posts = await res.json();
+            container.innerHTML = posts.map(p => `
+                <div class="feed-post">
+                    <div class="feed-header">
+                        <div class="avatar-ring" style="width:30px; height:30px; font-size:0.8rem;">${p.user.username[0].toUpperCase()}</div>
+                        <span>${p.user.username}</span>
+                    </div>
+                    <img src="${p.mediaUrl}" class="post-media" onerror="this.src='https://placehold.co/600x400?text=Post+Image'">
+                    <div class="post-info">
+                        <div class="post-caption"><b>${p.user.username}</b> ${p.content || ''}</div>
+                        <div style="font-size:0.8rem; opacity:0.5; margin-top:5px;">${new Date(p.createdAt).toLocaleDateString()}</div>
+                    </div>
+                </div>
+            `).join('') || '<p style="text-align:center; opacity:0.5;">No posts yet. Add some friends!</p>';
+        }
+    } catch (e) { container.innerHTML = 'Error loading feed'; }
+}
+
+async function fetchStories() {
+    const container = document.querySelector('#stories-container');
+    container.innerHTML = '<p style="text-align:center; opacity:0.5;">Loading stories...</p>';
+    const serverUrl = import.meta.env.VITE_BACKEND_URL || '';
+    try {
+        const res = await fetch(`${serverUrl}/stories/${username}`);
+        if (res.ok) {
+            const stories = await res.json();
+            container.innerHTML = `
+                <div style="display:flex; gap:15px; overflow-x:auto; padding-bottom:10px;">
+                    ${stories.map(s => `
+                        <div class="story-item" onclick="viewStory('${s.user.username}')" style="flex-shrink:0; text-align:center; cursor:pointer;">
+                            <div class="avatar-ring" style="width:60px; height:60px; border: 3px solid var(--accent-color); padding:2px;">
+                                <div style="width:100%; height:100%; border-radius:50%; background:#888; display:flex; align-items:center; justify-content:center;">
+                                    ${s.user.username[0].toUpperCase()}
+                                </div>
+                            </div>
+                            <div style="font-size:0.7rem; margin-top:5px; font-weight:bold;">${s.user.username}</div>
+                        </div>
+                    `).join('')}
+                </div>
+                <div style="margin-top:20px; opacity:0.5; text-align:center;">
+                    <p>Tap a story to view</p>
+                </div>
+            `;
+        }
+    } catch (e) { container.innerHTML = 'Error loading stories'; }
+}
+
+window.fetchFeed = fetchFeed;
+function switchTab(tabId) {
+    document.querySelectorAll('.view-section').forEach(s => s.classList.remove('active'));
+    document.querySelectorAll('.tab-item').forEach(t => t.classList.remove('active'));
+    
+    document.querySelector(`#${tabId}-view`).classList.add('active');
+    document.querySelector(`[data-tab="${tabId}"]`).classList.add('active');
+    
+    if (tabId === 'feed') fetchFeed();
+    if (tabId === 'space') fetchStories();
+    
+    // Auto-close sidebar on mobile
+    if (window.innerWidth <= 768) {
+        document.querySelector('#sidebar').classList.remove('active');
+        document.querySelector('.sidebar-overlay').classList.remove('active');
+    }
+}
+
+function viewStory(user) {
+    Toastify({ text: `Viewing stories from ${user}...`, duration: 2000 }).showToast();
+    // In a full implementation, this would open a Story Viewer modal like on RN
+}
+
+window.switchTab = switchTab;
+window.viewStory = viewStory;
 
 async function handleFileUpload(e) {
   const file = e.target.files[0];
@@ -382,7 +595,11 @@ function toggleSidebar() {
 let currentGroupId = null;
 
 async function switchRoom(room, isGroup = false, groupId = null) {
-  if (room === currentRoom && !groupId) return;
+  if (room === currentRoom && currentGroupId === groupId) return;
+  
+  // Leave old room
+  socket.emit('leave_room', currentRoom);
+  
   socket.emit('join_room', room);
   currentRoom = room;
   currentGroupId = groupId;
@@ -390,31 +607,41 @@ async function switchRoom(room, isGroup = false, groupId = null) {
   const chatTitle = document.querySelector('#chat-title');
   if (chatTitle) chatTitle.textContent = isGroup ? `👥 ${room}` : `# ${room}`;
   
-  const headerActions = document.querySelector('#header-actions');
-  if (headerActions) {
-      headerActions.innerHTML = isGroup ? `<button id="group-settings-btn" style="background:none; border:none; color:var(--text-secondary); cursor:pointer; font-size:1.2rem;">⚙️</button>` : '';
-      if (isGroup) {
-          const btn = document.querySelector('#group-settings-btn');
-          if (btn) btn.onclick = showGroupSettings;
-      }
-  }
-
+  const groupBtn = document.querySelector('#group-settings-btn');
+  if (groupBtn) groupBtn.style.display = isGroup ? 'block' : 'none';
+  
+  // Clear messages and load new ones
   const messageList = document.querySelector('#message-list');
   if (messageList) messageList.innerHTML = '';
   
   const serverUrl = import.meta.env.VITE_BACKEND_URL || '';
   try {
-    const res = await fetch(`${serverUrl}/messages/${room}`);
-    const messages = await res.json();
-    socket.emit('load_messages', messages);
-    updateRoomList();
-  } catch (err) {
-    console.error(err);
+      const res = await fetch(`${serverUrl}/messages/${room}`);
+      if (res.ok) {
+          const messages = await res.json();
+          messages.forEach(msg => {
+              addMessageToUI(msg, msg.author === username);
+          });
+          messageList.scrollTop = messageList.scrollHeight;
+      }
+  } catch (e) {
+      console.error("Failed to load messages", e);
   }
+
+  // Mark room as read
+  socket.emit('mark_read', { room, username });
   
-  document.querySelector('#sidebar').classList.remove('active');
-  document.querySelector('.sidebar-overlay').classList.remove('active');
+  updateRoomList();
+  
+  // Close sidebar on mobile
+  if (window.innerWidth <= 768) {
+    document.querySelector('#sidebar').classList.remove('active');
+    document.querySelector('.sidebar-overlay').classList.remove('active');
+  }
 }
+
+window.switchRoom = switchRoom;
+window.startPrivateChat = startPrivateChat;
 
 function startPrivateChat(targetUser) {
   if (targetUser === username) {
@@ -441,29 +668,253 @@ document.body.appendChild(groupSettingsOverlay);
 
 document.querySelector('#close-settings').onclick = () => groupSettingsOverlay.classList.remove('active');
 
-async function showGroupSettings() {
-    if (!currentGroupId) return;
-    
-    const leaveBtn = document.querySelector('#leave-group-btn');
-    const deleteBtn = document.querySelector('#delete-group-btn');
-    
-    groupSettingsOverlay.classList.add('active');
-    
-    // Simplification: show delete for all members in this demo, but logic is there
-    deleteBtn.style.display = 'block'; 
-    
-    leaveBtn.onclick = async () => {
-        if (confirm("Are you sure you want to leave this group?")) {
-            await leaveGroup(currentGroupId);
+// Find Friends Modal
+const findFriendsOverlay = document.createElement('div');
+findFriendsOverlay.className = 'modal-overlay';
+findFriendsOverlay.innerHTML = `
+    <div class="modal">
+        <h2>Find Friends</h2>
+        <input type="text" id="friend-search-input" placeholder="Search by username..." style="margin-bottom:1rem;">
+        <div id="friend-search-results" style="max-height: 200px; overflow-y: auto; text-align: left;"></div>
+        <hr style="margin: 1rem 0; opacity: 0.1;">
+        <h3>Pending Requests</h3>
+        <div id="friend-requests-list" style="max-height: 150px; overflow-y: auto; text-align: left;"></div>
+        <button id="close-find-friends" style="margin-top:1rem;">Close</button>
+    </div>
+`;
+document.body.appendChild(findFriendsOverlay);
+
+document.querySelector('#close-find-friends').onclick = () => findFriendsOverlay.classList.remove('active');
+
+async function showFindFriends() {
+    findFriendsOverlay.classList.add('active');
+    loadFriendRequests();
+}
+
+async function loadFriendRequests() {
+    const serverUrl = import.meta.env.VITE_BACKEND_URL || '';
+    try {
+        const res = await fetch(`${serverUrl}/friends/requests/${username}`);
+        if (res.ok) {
+            const requests = await res.json();
+            const list = document.querySelector('#friend-requests-list');
+            list.innerHTML = requests.map(r => `
+                <div style="display:flex; justify-content:space-between; align-items:center; padding: 10px; border-bottom: 1px solid var(--glass-border);">
+                    <span>👤 ${r.username}</span>
+                    <button onclick="acceptFriend('${r.username}')" style="background:var(--accent-color); color:white; padding: 5px 10px; font-size: 0.8rem;">Accept</button>
+                </div>
+            `).join('') || '<p style="opacity:0.5; text-align:center;">No pending requests</p>';
         }
+    } catch (e) { console.error(e); }
+}
+
+const searchInput = document.querySelector('#friend-search-input');
+searchInput.oninput = debounce(async () => {
+    const query = searchInput.value.trim();
+    if (query.length < 2) return;
+    const serverUrl = import.meta.env.VITE_BACKEND_URL || '';
+    try {
+        const res = await fetch(`${serverUrl}/users/search?q=${query}`);
+        if (res.ok) {
+            const users = await res.json();
+            const results = document.querySelector('#friend-search-results');
+            results.innerHTML = users.filter(u => u.username !== username).map(u => `
+                <div style="display:flex; justify-content:space-between; align-items:center; padding: 10px;">
+                    <span>👤 ${u.username}</span>
+                    <button onclick="sendFriendRequest('${u.username}')" style="background:none; border: 1px solid var(--accent-color); color:var(--accent-color); padding: 5px 10px; font-size: 0.8rem;">Add</button>
+                </div>
+            `).join('') || '<p style="opacity:0.5; text-align:center;">No users found</p>';
+        }
+    } catch (e) { console.error(e); }
+}, 300);
+
+// Calling UI
+const incomingCallOverlay = document.createElement('div');
+incomingCallOverlay.className = 'call-overlay incoming-call';
+incomingCallOverlay.innerHTML = `
+    <div class="call-avatar" id="incoming-avatar">?</div>
+    <h2 id="incoming-caller-name">Incoming Call...</h2>
+    <div class="call-actions">
+        <button class="call-btn accept" id="accept-call">📞</button>
+        <button class="call-btn decline" id="decline-call">✖</button>
+    </div>
+`;
+document.body.appendChild(incomingCallOverlay);
+
+const activeCallOverlay = document.createElement('div');
+activeCallOverlay.className = 'call-overlay active-call';
+activeCallOverlay.innerHTML = `
+    <div class="call-avatar" id="active-avatar">?</div>
+    <h2 id="active-peer-name">In Call...</h2>
+    <p id="call-duration">00:00</p>
+    <div id="remote-video" style="width: 100%; height: 300px; background:#000; display:none;"></div>
+    <div class="call-actions">
+        <button class="call-btn decline" id="end-call">✖</button>
+    </div>
+`;
+document.body.appendChild(activeCallOverlay);
+
+let agoraClient = null;
+let localTracks = { videoTrack: null, audioTrack: null };
+
+async function initAgora() {
+    if (agoraClient) return;
+    agoraClient = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
+    agoraClient.on("user-published", async (user, mediaType) => {
+        await agoraClient.subscribe(user, mediaType);
+        if (mediaType === "video") {
+            const remoteVideo = document.querySelector("#remote-video");
+            remoteVideo.style.display = "block";
+            user.videoTrack.play("remote-video");
+        }
+        if (mediaType === "audio") {
+            user.audioTrack.play();
+        }
+    });
+}
+
+async function startAgoraCall(channelName, type) {
+    await initAgora();
+    const serverUrl = import.meta.env.VITE_BACKEND_URL || '';
+    const tokenRes = await fetch(`${serverUrl}/agora-token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channelName, uid: 0 })
+    });
+    const { token } = await tokenRes.json();
+    
+    await agoraClient.join("11579438c5924e1896ff965fbea3460a", channelName, token, 0);
+    
+    localTracks.audioTrack = await AgoraRTC.createMicrophoneAudioTrack();
+    if (type === "video") {
+        localTracks.videoTrack = await AgoraRTC.createCameraVideoTrack();
+        await agoraClient.publish([localTracks.audioTrack, localTracks.videoTrack]);
+    } else {
+        await agoraClient.publish(localTracks.audioTrack);
+    }
+}
+
+async function leaveAgoraCall() {
+    if (localTracks.audioTrack) {
+        localTracks.audioTrack.stop();
+        localTracks.audioTrack.close();
+    }
+    if (localTracks.videoTrack) {
+        localTracks.videoTrack.stop();
+        localTracks.videoTrack.close();
+    }
+    if (agoraClient) {
+        await agoraClient.leave();
+    }
+    const remoteVideo = document.querySelector("#remote-video");
+    if (remoteVideo) {
+        remoteVideo.style.display = "none";
+        remoteVideo.innerHTML = "";
+    }
+}
+
+function startCall(type) {
+    if (currentRoom === 'general' || currentRoom.includes('_') === false) {
+        showError("You can only call in private chats");
+        return;
+    }
+    const peer = currentRoom.split('_').find(u => u !== username);
+    activeCallOverlay.classList.add('active');
+    document.querySelector('#active-peer-name').textContent = `Calling ${peer}...`;
+    document.querySelector('#active-avatar').textContent = peer[0].toUpperCase();
+    
+    socket.emit('call_user', { to: peer, from: username, type, channelName: currentRoom });
+    startAgoraCall(currentRoom, type);
+}
+
+socket.on('call_accepted', (data) => {
+    document.querySelector('#active-peer-name').textContent = `In call with ${data.from}`;
+    // Already joined Agora in startCall
+});
+
+socket.on('call_rejected', () => {
+    activeCallOverlay.classList.remove('active');
+    leaveAgoraCall();
+    showError("Call rejected or busy");
+});
+
+socket.on('call_ended', () => {
+    activeCallOverlay.classList.remove('active');
+    leaveAgoraCall();
+});
+
+socket.on('incoming_call', (data) => {
+    incomingCallOverlay.classList.add('active');
+    document.querySelector('#incoming-caller-name').textContent = `${data.from} is calling...`;
+    document.querySelector('#incoming-avatar').textContent = data.from[0].toUpperCase();
+    
+    document.querySelector('#accept-call').onclick = () => {
+        incomingCallOverlay.classList.remove('active');
+        activeCallOverlay.classList.add('active');
+        document.querySelector('#active-peer-name').textContent = `In call with ${data.from}`;
+        document.querySelector('#active-avatar').textContent = data.from[0].toUpperCase();
+        socket.emit('answer_call', { to: data.from, from: username });
+        startAgoraCall(data.channelName, data.type);
     };
     
-    deleteBtn.onclick = async () => {
-        if (confirm("DANGER: This will delete the group and all its messages. Proceed?")) {
-            await deleteGroup(currentGroupId);
-        }
+    document.querySelector('#decline-call').onclick = () => {
+        incomingCallOverlay.classList.remove('active');
+        socket.emit('decline_call', { to: data.from, from: username });
+    };
+});
+
+document.querySelector('#end-call').onclick = () => {
+    const peer = currentRoom.split('_').find(u => u !== username);
+    socket.emit('end_call', { to: peer });
+    activeCallOverlay.classList.remove('active');
+    leaveAgoraCall();
+};
+
+// Utils
+function debounce(func, wait) {
+    let timeout;
+    return function(...args) {
+        clearTimeout(timeout);
+        timeout = setTimeout(() => func(...args), wait);
     };
 }
+
+async function sendFriendRequest(to) {
+    const serverUrl = import.meta.env.VITE_BACKEND_URL || '';
+    try {
+        const res = await fetch(`${serverUrl}/friends/request`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ fromUser: username, toUser: to })
+        });
+        if (res.ok) {
+            Toastify({ text: "Request sent", duration: 2000 }).showToast();
+            socket.emit('friend_request', { from: username, to });
+        }
+    } catch (e) { console.error(e); }
+}
+
+async function acceptFriend(from) {
+    const serverUrl = import.meta.env.VITE_BACKEND_URL || '';
+    try {
+        const res = await fetch(`${serverUrl}/friends/accept`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: username, fromUsername: from })
+        });
+        if (res.ok) {
+            Toastify({ text: "Friend added!", duration: 2000 }).showToast();
+            socket.emit('friend_accept', { from: username, to: from });
+            loadFriendRequests();
+            loadRooms();
+        }
+    } catch (e) { console.error(e); }
+}
+
+window.showFindFriends = showFindFriends;
+window.startCall = startCall;
+window.sendFriendRequest = sendFriendRequest;
+window.acceptFriend = acceptFriend;
 
 async function leaveGroup(groupId) {
     const serverUrl = import.meta.env.VITE_BACKEND_URL || '';
