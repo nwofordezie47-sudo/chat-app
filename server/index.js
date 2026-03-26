@@ -570,7 +570,10 @@ app.get('/messages/:room/shots', async (req, res) => {
 
 app.delete('/messages/:id', async (req, res) => {
   try {
-    await Message.findByIdAndDelete(req.params.id);
+    const updated = await Message.findByIdAndUpdate(req.params.id, { isDeleted: true, message: '🚫 This message was deleted', file: null }, { new: true });
+    if (updated) {
+        io.to(updated.room).emit('message_deleted', { messageId: req.params.id, room: updated.room });
+    }
     res.json({ message: 'Message deleted' });
   } catch (err) {
     console.error('Delete message error:', err);
@@ -581,7 +584,10 @@ app.delete('/messages/:id', async (req, res) => {
 app.patch('/messages/:id', async (req, res) => {
   try {
     const { message } = req.body;
-    const updated = await Message.findByIdAndUpdate(req.params.id, { message }, { new: true });
+    const updated = await Message.findByIdAndUpdate(req.params.id, { message, isEdited: true }, { new: true });
+    if (updated) {
+        io.to(updated.room).emit('message_edited', { messageId: req.params.id, room: updated.room, newMessage: message });
+    }
     res.json(updated);
   } catch (err) {
     console.error('Edit message error:', err);

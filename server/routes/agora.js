@@ -5,13 +5,10 @@ import express from 'express';
 const router = express.Router();
 
 router.post('/', (req, res) => {
-    // Force the client payload to provide what we need
     const { channelName, uid } = req.body;
     
-    // In a real app we would load Cert from process.env, 
-    // but the user only supplied App ID for now. We will use AppID token mode.
     const appId = process.env.AGORA_APP_ID || '11579438c5924e1896ff965fbea3460a'; 
-    const appCertificate = process.env.AGORA_APP_CERTIFICATE || ''; // Required for production security!
+    const appCertificate = process.env.AGORA_APP_CERTIFICATE || ''; 
 
     if (!channelName) {
         return res.status(400).json({ error: 'channelName is required' });

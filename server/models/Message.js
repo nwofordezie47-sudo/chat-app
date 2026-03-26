@@ -10,7 +10,9 @@ const messageSchema = new mongoose.Schema({
   time: { type: String, required: true },
   read: { type: Boolean, default: false },
   expiresAt: { type: Date },
-  saved: { type: Boolean, default: false }
+  saved: { type: Boolean, default: false },
+  isEdited: { type: Boolean, default: false },
+  isDeleted: { type: Boolean, default: false }
 });
 
 const Message = mongoose.model('Message', messageSchema);
