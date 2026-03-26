@@ -15,23 +15,18 @@ router.post('/', (req, res) => {
     }
 
     if (!appCertificate) {
-         // If there is no certificate provided, we just return the App ID as the token 
-         // since they are probably in Testing Mode on the Agora console (which doesn't enforce tokens).
         return res.json({ token: appId }); 
     }
 
-    // Set token expiry to 1 hour
     const expirationTimeInSeconds = 3600;
     const currentTimestamp = Math.floor(Date.now() / 1000);
     const privilegeExpiredTs = currentTimestamp + expirationTimeInSeconds;
 
-    // Use integer UID or 0 if string
     let numericUid = 0; 
     if (uid && !isNaN(uid)) {
         numericUid = parseInt(uid, 10);
     }
 
-    // Generate Token
     try {
         const token = RtcTokenBuilder.buildTokenWithUid(
             appId,

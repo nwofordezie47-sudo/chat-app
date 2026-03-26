@@ -28,6 +28,146 @@ function showModal(title, message) {
   infoModalOverlay.classList.add('active');
 }
 
+// Context Menu
+const contextMenu = document.createElement('div');
+contextMenu.className = 'context-menu';
+contextMenu.innerHTML = `
+    <div class="context-menu-item" id="cm-copy">📋 Copy</div>
+    <div class="context-menu-item" id="cm-forward">↗️ Forward</div>
+    <div class="context-menu-item" id="cm-edit">✏️ Edit</div>
+    <div class="context-menu-item delete" id="cm-delete">🗑️ Delete</div>
+`;
+document.body.appendChild(contextMenu);
+
+// Shot Viewer
+const shotViewer = document.createElement('div');
+shotViewer.className = 'shot-viewer-overlay';
+shotViewer.innerHTML = `
+    <div class="shot-timer">10</div>
+    <img class="shot-image" src="" alt="Shot" />
+`;
+document.body.appendChild(shotViewer);
+
+let selectedMessageId = null;
+let selectedMessageText = '';
+let selectedMessageData = null;
+
+document.addEventListener('click', () => contextMenu.classList.remove('active'));
+
+// Action Listeners
+document.querySelector('#cm-copy').onclick = () => {
+    navigator.clipboard.writeText(selectedMessageText);
+    Toastify({ text: "Copied to clipboard", duration: 2000 }).showToast();
+};
+
+document.querySelector('#cm-edit').onclick = () => {
+    const newText = prompt("Edit message:", selectedMessageText);
+    if (newText !== null && newText.trim() !== "" && newText !== selectedMessageText) {
+        handleEdit(selectedMessageId, newText.trim());
+    }
+};
+
+document.querySelector('#cm-delete').onclick = () => {
+    if (confirm("Delete this message?")) {
+        handleDelete(selectedMessageId);
+    }
+};
+
+document.querySelector('#cm-forward').onclick = () => {
+    showForwardModal();
+};
+
+// Forward Modal
+const forwardModalOverlay = document.createElement('div');
+forwardModalOverlay.className = 'modal-overlay';
+forwardModalOverlay.id = 'forward-modal';
+forwardModalOverlay.innerHTML = `
+    <div class="modal">
+        <h2>Forward Message</h2>
+        <div id="forward-user-list" style="max-height: 300px; overflow-y: auto; text-align: left; margin-bottom: 1.5rem;"></div>
+        <button id="forward-close">Cancel</button>
+    </div>
+`;
+document.body.appendChild(forwardModalOverlay);
+
+document.querySelector('#forward-close').onclick = () => forwardModalOverlay.classList.remove('active');
+
+async function handleEdit(id, newText) {
+    const serverUrl = import.meta.env.VITE_BACKEND_URL || '';
+    try {
+        const res = await fetch(`${serverUrl}/messages/${id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: newText })
+        });
+        if (!res.ok) showError("Failed to edit message");
+    } catch (e) {
+        showError("Connection error");
+    }
+}
+
+async function handleDelete(id) {
+    const serverUrl = import.meta.env.VITE_BACKEND_URL || '';
+    try {
+        const res = await fetch(`${serverUrl}/messages/${id}`, {
+          method: 'DELETE'
+        });
+        if (!res.ok) showError("Failed to delete message");
+    } catch (e) {
+        showError("Connection error");
+    }
+}
+
+function showForwardModal() {
+    const listEl = document.querySelector('#forward-user-list');
+    listEl.innerHTML = '<p style="text-align:center; opacity:0.5;">Loading users...</p>';
+    forwardModalOverlay.classList.add('active');
+    
+    socket.emit('get_online_users');
+}
+
+socket.on('update_user_list', (usersList) => {
+    const forwardListEl = document.querySelector('#forward-user-list');
+    const sidebarUserList = document.querySelector('#user-list');
+    
+    const usersHtml = usersList
+        .filter(u => u !== username)
+        .map(u => `<p class="user-item" data-username="${u}">👤 ${u}</p>`)
+        .join('');
+        
+    if (sidebarUserList) sidebarUserList.innerHTML = usersHtml;
+    if (forwardListEl) {
+        forwardListEl.innerHTML = usersHtml;
+        forwardListEl.querySelectorAll('.user-item').forEach(item => {
+            item.onclick = () => {
+                forwardTo(item.getAttribute('data-username'));
+                forwardModalOverlay.classList.remove('active');
+            };
+        });
+    }
+});
+
+function forwardTo(targetUser) {
+    if (!selectedMessageData) return;
+    
+    // We need to join the private room first if it's not the current one
+    // But for a simple forward, we can just determine the room name and emit
+    const targetRoom = [username, targetUser].sort().join('_');
+    
+    const forwardData = {
+        room: targetRoom,
+        author: username,
+        message: selectedMessageText,
+        file: selectedMessageData.file,
+        fileName: selectedMessageData.fileName,
+        fileType: selectedMessageData.fileType,
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    };
+    
+    socket.emit('send_message', forwardData);
+    Toastify({ text: `Forwarded to ${targetUser}`, duration: 2000 }).showToast();
+}
+
 function showError(message) {
   Toastify({
     text: message,
@@ -119,12 +259,42 @@ async function handleAuth(e) {
   }
 }
 
-function joinChat() {
+async function joinChat() {
   socket.auth = { username };
   socket.connect();
   socket.emit('login', username);
   socket.emit('join_room', 'general');
   renderChat();
+  loadRooms();
+}
+
+let userGroups = [];
+async function loadRooms() {
+    const serverUrl = import.meta.env.VITE_BACKEND_URL || '';
+    try {
+        const res = await fetch(`${serverUrl}/groups/${username}`);
+        if (res.ok) {
+            userGroups = await res.json();
+            updateRoomList();
+        }
+    } catch (e) {
+        console.error("Failed to load groups");
+    }
+}
+
+function updateRoomList() {
+    const roomList = document.querySelector('#room-list');
+    if (!roomList) return;
+    
+    let html = `<p onclick="switchRoom('general')" class="${currentRoom === 'general' ? 'active' : ''}"># General</p>`;
+    
+    userGroups.forEach(g => {
+        html += `<p onclick="switchRoom('${g.name}', true, '${g._id}')" class="${currentRoom === g.name ? 'active' : ''}">
+            👥 ${g.name}
+        </p>`;
+    });
+    
+    roomList.innerHTML = html;
 }
 
 function renderChat() {
@@ -132,7 +302,9 @@ function renderChat() {
     <div class="chat-container">
       <aside class="sidebar" id="sidebar">
         <h3>Chats</h3>
-        <p onclick="switchRoom('general')"># General (Global)</p>
+        <div id="room-list">
+            <p onclick="switchRoom('general')" class="active"># General</p>
+        </div>
         <br>
         <h3>Online Users</h3>
         <div id="user-list"></div>
@@ -143,9 +315,12 @@ function renderChat() {
       </aside>
       <main class="chat-area">
         <header class="chat-header" id="chat-header">
-          <div style="display:flex; align-items:center;">
+          <div style="display:flex; align-items:center; gap: 15px;">
             <button class="menu-btn" onclick="toggleSidebar()">☰</button>
-            <h3># ${currentRoom}</h3>
+            <h3 id="chat-title"># general</h3>
+          </div>
+          <div id="header-actions">
+              <!-- Settings icon for groups will appear here -->
           </div>
         </header>
         <div class="message-list" id="message-list"></div>
@@ -204,14 +379,41 @@ function toggleSidebar() {
   document.querySelector('.sidebar-overlay').classList.toggle('active');
 }
 
-function switchRoom(room) {
+let currentGroupId = null;
+
+async function switchRoom(room, isGroup = false, groupId = null) {
+  if (room === currentRoom && !groupId) return;
+  socket.emit('join_room', room);
   currentRoom = room;
-  document.querySelector('#chat-header h3').textContent = `# ${room}`;
-  document.querySelector('#message-list').innerHTML = '';
+  currentGroupId = groupId;
+  
+  const chatTitle = document.querySelector('#chat-title');
+  if (chatTitle) chatTitle.textContent = isGroup ? `👥 ${room}` : `# ${room}`;
+  
+  const headerActions = document.querySelector('#header-actions');
+  if (headerActions) {
+      headerActions.innerHTML = isGroup ? `<button id="group-settings-btn" style="background:none; border:none; color:var(--text-secondary); cursor:pointer; font-size:1.2rem;">⚙️</button>` : '';
+      if (isGroup) {
+          const btn = document.querySelector('#group-settings-btn');
+          if (btn) btn.onclick = showGroupSettings;
+      }
+  }
+
+  const messageList = document.querySelector('#message-list');
+  if (messageList) messageList.innerHTML = '';
+  
+  const serverUrl = import.meta.env.VITE_BACKEND_URL || '';
+  try {
+    const res = await fetch(`${serverUrl}/messages/${room}`);
+    const messages = await res.json();
+    socket.emit('load_messages', messages);
+    updateRoomList();
+  } catch (err) {
+    console.error(err);
+  }
+  
   document.querySelector('#sidebar').classList.remove('active');
   document.querySelector('.sidebar-overlay').classList.remove('active');
-  if (room === 'general') socket.emit('join_room', 'general');
-  socket.emit('read_messages', { room, user: username });
 }
 
 function startPrivateChat(targetUser) {
@@ -219,29 +421,89 @@ function startPrivateChat(targetUser) {
     showError("You cannot chat with yourself!");
     return; 
   }
-  const header = document.querySelector('#chat-header h3');
-  if (header) header.textContent = `Starting chat with ${targetUser}...`;
-  document.body.style.cursor = 'wait';
-  socket.emit('join_private', targetUser);
-  document.querySelector('#sidebar').classList.remove('active');
-  document.querySelector('.sidebar-overlay').classList.remove('active');
+  const room = [username, targetUser].sort().join('_');
+  switchRoom(room);
 }
 
-socket.on('user_list', (users) => {
-  const userListEl = document.querySelector('#user-list');
-  if (!userListEl) return;
-  userListEl.innerHTML = users
-    .filter(u => u !== username)
-    .map(u => `<p onclick="startPrivateChat('${u}')">👤 ${u}</p>`)
-    .join('');
-});
+// Group Settings Modal
+const groupSettingsOverlay = document.createElement('div');
+groupSettingsOverlay.className = 'modal-overlay';
+groupSettingsOverlay.innerHTML = `
+    <div class="modal">
+        <h2>Group Settings</h2>
+        <div id="group-info" style="margin-bottom: 2rem;"></div>
+        <button id="leave-group-btn" style="background:#e74c3c; color:white; margin-bottom:1rem; border:none; padding: 10px; border-radius: 8px; width: 100%; cursor:pointer;">Leave Group</button>
+        <button id="delete-group-btn" style="background:#c0392b; color:white; display:none; border:none; padding: 10px; border-radius: 8px; width: 100%; cursor:pointer;">Delete Group (Admin)</button>
+        <button id="close-settings" style="background:none; color:var(--text-secondary); border:none; cursor:pointer;">Close</button>
+    </div>
+`;
+document.body.appendChild(groupSettingsOverlay);
 
-socket.on('private_room_joined', (data) => {
-  document.body.style.cursor = 'default';
-  currentRoom = data.room;
-  document.querySelector('#chat-header h3').textContent = `Chat with ${data.partner}`;
-  document.querySelector('#message-list').innerHTML = '';
-});
+document.querySelector('#close-settings').onclick = () => groupSettingsOverlay.classList.remove('active');
+
+async function showGroupSettings() {
+    if (!currentGroupId) return;
+    
+    const leaveBtn = document.querySelector('#leave-group-btn');
+    const deleteBtn = document.querySelector('#delete-group-btn');
+    
+    groupSettingsOverlay.classList.add('active');
+    
+    // Simplification: show delete for all members in this demo, but logic is there
+    deleteBtn.style.display = 'block'; 
+    
+    leaveBtn.onclick = async () => {
+        if (confirm("Are you sure you want to leave this group?")) {
+            await leaveGroup(currentGroupId);
+        }
+    };
+    
+    deleteBtn.onclick = async () => {
+        if (confirm("DANGER: This will delete the group and all its messages. Proceed?")) {
+            await deleteGroup(currentGroupId);
+        }
+    };
+}
+
+async function leaveGroup(groupId) {
+    const serverUrl = import.meta.env.VITE_BACKEND_URL || '';
+    try {
+        const res = await fetch(`${serverUrl}/groups/${groupId}/remove-member`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username })
+        });
+        if (res.ok) {
+            Toastify({ text: "Left group", duration: 2000 }).showToast();
+            groupSettingsOverlay.classList.remove('active');
+            await loadRooms();
+            switchRoom('general');
+        } else {
+            showError("Failed to leave group");
+        }
+    } catch (e) {
+        showError("Connection error");
+    }
+}
+
+async function deleteGroup(groupId) {
+    const serverUrl = import.meta.env.VITE_BACKEND_URL || '';
+    try {
+        const res = await fetch(`${serverUrl}/groups/${groupId}`, {
+            method: 'DELETE'
+        });
+        if (res.ok) {
+            Toastify({ text: "Group deleted", duration: 2000 }).showToast();
+            groupSettingsOverlay.classList.remove('active');
+            await loadRooms();
+            switchRoom('general');
+        } else {
+            showError("Failed to delete group");
+        }
+    } catch (e) {
+        showError("Connection error");
+    }
+}
 
 function sendMessage() {
   const input = document.querySelector('#message-input');
@@ -262,28 +524,100 @@ function sendMessage() {
 function addMessageToUI(data, isOwn, container) {
   const messageList = container || document.querySelector('#message-list');
   if (!messageList) return;
+  
+  // Handlers for edit/delete/forward
+  const isDeleted = data.isDeleted || data.message === '🚫 This message was deleted';
+  const isEdited = data.isEdited;
+
   const messageElement = document.createElement('div');
   messageElement.classList.add('message', isOwn ? 'own' : 'other');
-  let contentHtml = `<div class="message-content">${data.message}</div>`;
-  if (data.file) {
-    if (data.fileType.startsWith('image/')) {
-      contentHtml = `<div class="message-content"><img src="${data.file}" style="max-width: 200px; border-radius: 8px;" alt="${data.fileName}" /></div>`;
+  if (isDeleted) messageElement.classList.add('deleted');
+  messageElement.setAttribute('data-id', data._id);
+
+  let contentHtml = `<div class="message-content">${data.message || ''}${isEdited ? '<span class="edited-tag">(edited)</span>' : ''}</div>`;
+  
+  if (data.file && !isDeleted) {
+    if (data.fileType === 'shot') {
+        contentHtml = `<div class="message-content shot-content" style="cursor:pointer; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 10px; display: flex; align-items: center; gap: 10px;">
+            <span style="font-size: 1.5rem;">📸</span>
+            <span>${isOwn ? 'Sent a shot' : 'Tap to view shot'}</span>
+        </div>`;
+    } else if (data.fileType.startsWith('image/')) {
+      contentHtml = `<div class="message-content"><img src="${data.file}" style="max-width: 250px; border-radius: 12px; box-shadow: var(--shadow-md);" alt="${data.fileName}" /></div>`;
     } else {
-      contentHtml = `<div class="message-content"><a href="${data.file}" download="${data.fileName}" style="color:var(--accent-color)">📄 ${data.fileName}</a></div>`;
+      contentHtml = `<div class="message-content"><a href="${data.file}" download="${data.fileName}" style="color:var(--accent-color); font-weight:600; text-decoration:none;">📄 ${data.fileName}</a></div>`;
     }
   }
+
   messageElement.innerHTML = `
     <div class="message-meta">
-      ${isOwn ? 'You' : data.author} 
-      <span style="font-weight:normal; font-size:0.7em; margin-left:5px;">${data.time}</span>
-      ${isOwn ? `<span class="read-status" style="margin-left:5px;">${data.read ? '✓✓' : '✓'}</span>` : ''}
+      <span>${isOwn ? 'You' : data.author}</span>
+      <div style="display:flex; align-items:center; gap:5px;">
+        <span style="font-weight:normal; font-size:0.85em; opacity:0.6;">${data.time}</span>
+        ${isOwn ? `<span class="read-status ${data.read ? 'read' : ''}">${data.read ? '✓✓' : '✓'}</span>` : ''}
+      </div>
     </div>
     ${contentHtml}
   `;
+
+  // Right click / Long press for context menu
+  const handleContextMenu = (e) => {
+      e.preventDefault();
+      if (isDeleted) return;
+      selectedMessageId = data._id;
+      selectedMessageText = data.message;
+      selectedMessageData = data;
+      
+      const editBtn = document.querySelector('#cm-edit');
+      const deleteBtn = document.querySelector('#cm-delete');
+      
+      if (isOwn) {
+          editBtn.style.display = 'flex';
+          deleteBtn.style.display = 'flex';
+      } else {
+          editBtn.style.display = 'none';
+          deleteBtn.style.display = 'none';
+      }
+      
+      contextMenu.style.top = `${e.clientY}px`;
+      contextMenu.style.left = `${e.clientX}px`;
+      contextMenu.classList.add('active');
+  };
+
+  messageElement.addEventListener('contextmenu', handleContextMenu);
+  
+  // Shot View Logic
+  if (data.fileType === 'shot' && !isDeleted) {
+      messageElement.addEventListener('click', () => {
+          if (isOwn) return;
+          showShot(data.file, data._id);
+      });
+  }
+
   messageList.appendChild(messageElement);
   if (!container) {
     setTimeout(() => { messageList.scrollTop = messageList.scrollHeight; }, 10);
   }
+}
+
+function showShot(url, id) {
+    const img = shotViewer.querySelector('.shot-image');
+    const timer = shotViewer.querySelector('.shot-timer');
+    img.src = url;
+    shotViewer.classList.add('active');
+    
+    let count = 10;
+    timer.textContent = count;
+    
+    const interval = setInterval(() => {
+        count--;
+        timer.textContent = count;
+        if (count <= 0) {
+            clearInterval(interval);
+            shotViewer.classList.remove('active');
+            socket.emit('mark_read', { room: currentRoom, username });
+        }
+    }, 1000);
 }
 
 const themeToggleBtn = document.createElement('button');
@@ -318,12 +652,44 @@ socket.on('connect', () => {
 socket.on('receive_message', (data) => {
   if (data.room === currentRoom) {
     addMessageToUI(data, false);
-    socket.emit('read_messages', { room: currentRoom, user: username });
+    socket.emit('mark_read', { room: currentRoom, username });
   }
 });
 
+socket.on('message_edited', ({ messageId, newMessage, room }) => {
+    if (room === currentRoom) {
+        const msgEl = document.querySelector(`.message[data-id="${messageId}"]`);
+        if (msgEl) {
+            const content = msgEl.querySelector('.message-content');
+            if (content) {
+                content.innerHTML = `${newMessage}<span class="edited-tag">(edited)</span>`;
+            }
+        }
+    }
+});
+
+socket.on('message_deleted', ({ messageId, room }) => {
+    if (room === currentRoom) {
+        const msgEl = document.querySelector(`.message[data-id="${messageId}"]`);
+        if (msgEl) {
+            msgEl.classList.add('deleted');
+            const content = msgEl.querySelector('.message-content');
+            if (content) content.innerHTML = '🚫 This message was deleted';
+        }
+    }
+});
+
+socket.on('global_read_update', ({ room, reader }) => {
+    if (room === currentRoom) {
+        document.querySelectorAll('.message.own .read-status').forEach(el => {
+            el.textContent = '✓✓';
+            el.classList.add('read');
+        });
+    }
+});
+
 let typingTimeout;
-socket.on('typing', (data) => {
+socket.on('user_typing', (data) => {
   const typingEl = document.querySelector('#typing-indicator');
   if (typingEl) {
     typingEl.textContent = `${data.user} is typing...`;
@@ -334,7 +700,10 @@ socket.on('typing', (data) => {
 
 socket.on('messages_read', ({ room }) => {
   if (room === currentRoom) {
-    document.querySelectorAll('.read-status').forEach(el => { el.textContent = '✓✓'; });
+    document.querySelectorAll('.read-status').forEach(el => { 
+        el.textContent = '✓✓'; 
+        el.classList.add('read');
+    });
   }
 });
 
@@ -343,10 +712,37 @@ socket.on('load_messages', (messages) => {
   if (messageList) {
     messageList.innerHTML = '';
     const fragment = document.createDocumentFragment();
-    messages.forEach(msg => { addMessageToUI(msg, msg.author === username, fragment); });
+    
+    // Find first unread message
+    let firstUnreadId = null;
+    for (const msg of messages) {
+        if (msg.author !== username && !msg.read) {
+            firstUnreadId = msg._id;
+            break;
+        }
+    }
+
+    messages.forEach(msg => { 
+        if (msg._id === firstUnreadId) {
+            const sep = document.createElement('div');
+            sep.className = 'unread-separator';
+            sep.innerHTML = '<span>New Messages Below</span>';
+            fragment.appendChild(sep);
+        }
+        addMessageToUI(msg, msg.author === username, fragment); 
+    });
+    
     messageList.appendChild(fragment);
-    messageList.scrollTop = messageList.scrollHeight;
-    socket.emit('read_messages', { room: currentRoom, user: username });
+    
+    // Scroll to unread or bottom
+    if (firstUnreadId) {
+        const unreadEl = messageList.querySelector('.unread-separator');
+        if (unreadEl) unreadEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    } else {
+        messageList.scrollTop = messageList.scrollHeight;
+    }
+    
+    socket.emit('mark_read', { room: currentRoom, username });
   }
 });
 
